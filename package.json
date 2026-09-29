@@ -1,0 +1,87 @@
+{
+  "name": "easy-ssh",
+  "displayName": "Easy SSH",
+  "description": "Manage SSH connections in a terminal and transfer files with the remote directory you are in. Works in VS Code and Cursor, on internal and external networks.",
+  "version": "0.1.0",
+  "publisher": "easy-ssh",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "ssh",
+    "sftp",
+    "upload",
+    "download",
+    "remote",
+    "cursor"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onCommand:easySsh.open"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "easySsh.open",
+        "title": "Open",
+        "category": "Easy SSH"
+      },
+      {
+        "command": "easySsh.setDownloadFolder",
+        "title": "Set Download Folder",
+        "category": "Easy SSH"
+      },
+      {
+        "command": "easySsh.resetHostKeys",
+        "title": "Reset Trusted Host Keys",
+        "category": "Easy SSH"
+      }
+    ],
+    "configuration": {
+      "title": "Easy SSH",
+      "properties": {
+        "easySsh.downloadFolder": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Local folder for files you download. Leave empty to use the Desktop."
+        },
+        "easySsh.readyTimeout": {
+          "type": "number",
+          "default": 20000,
+          "minimum": 3000,
+          "markdownDescription": "How long to wait for an SSH handshake, in milliseconds."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "check": "tsc --noEmit",
+    "test": "node scripts/test.js"
+  },
+  "dependencies": {
+    "ssh2": "^1.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/ssh2": "^1.15.6",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,15 @@
+src/**
+scripts/**
+tsconfig.json
+esbuild.js
+**/*.map
+**/*.ts
+.git/**
+.github/**
+**/*.test.js
+node_modules/**
+!node_modules/ssh2/**
+!node_modules/asn1/**
+!node_modules/bcrypt-pbkdf/**
+!node_modules/tweetnacl/**
+!node_modules/safer-buffer/**
