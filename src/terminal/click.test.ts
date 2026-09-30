@@ -20,7 +20,7 @@ const files: BrowseEntry[] = [
   { name: 'other.txt', path: '/root/other.txt', kind: 'file', size: 4, mtime: 0 },
 ];
 
-describe('plain click', () => {
+describe('plain click (easySsh.plainClick)', () => {
   it('downloads a file, cds a directory, and ignores a drag', async () => {
     const written: string[] = [];
     const downloads: string[] = [];
@@ -29,15 +29,16 @@ describe('plain click', () => {
     let push: ((chunk: string) => void) | undefined;
     const app = new EasySshApp(host(written, downloads, scrolls, (onData) => {
       push = onData;
-    }), (data) => shown.push(data));
+    }, true), (data) => shown.push(data));
     app.setSize(80, 24);
     app.open();
     await flush();
     app.onInput([{ type: 'key', key: 'enter' }]);
     await flush();
     assert.equal(typeof push, 'function');
-    push?.('\x1b]7;file://host/root\x07');
+    push?.('\x1b]7;/root\x07');
     push?.('\x1b[H\x1b[2Jtmp notes.txt other.txt');
+    assert.match(shown.join(''), /\x1b\[\?1000h/);
 
     click(app, 1, 1, 20, 1);
     await flush();
@@ -77,11 +78,86 @@ function click(app: EasySshApp, col: number, row: number, upCol = col, upRow = r
   app.onRawInput(`\x1b[<0;${col};${row}M\x1b[<0;${upCol};${upRow}m`);
 }
 
+describe('Ctrl+click links (default)', () => {
+  it('never turns on mouse reporting, so the terminal selects text normally', async () => {
+    const written: string[] = [];
+    const downloads: string[] = [];
+    const shown: string[] = [];
+    let push: ((chunk: string) => void) | undefined;
+    const app = new EasySshApp(host(written, downloads, [], (onData) => {
+      push = onData;
+    }), (data) => shown.push(data));
+    app.setSize(80, 24);
+    app.open();
+    await flush();
+    app.onInput([{ type: 'key', key: 'enter' }]);
+    await flush();
+    push?.('\x1b]7;/root\x07');
+    push?.('tmp notes.txt other.txt\r\n');
+    const output = shown.join('');
+    assert.doesNotMatch(output, /\x1b\[\?100[0-3]h/);
+    assert.match(output.replace(/\x1b\[[0-9;]*m/g, ''), /Ctrl\+click a file name to download/);
+
+    // Names still open through the terminal link provider.
+    const links = app.linkFor('tmp notes.txt other.txt');
+    assert.deepEqual(links.map((link) => link.remotePath), ['/root/notes.txt', '/root/other.txt', '/root/tmp']);
+    assert.match(links[0].tooltip, /to ~\/Desktop$/);
+    app.activatePath('/root/notes.txt');
+    await flush();
+    assert.deepEqual(downloads, ['/root/notes.txt']);
+  });
+
+  it('gives mouse reports to the remote program that asked for them', async () => {
+    const written: string[] = [];
+    const downloads: string[] = [];
+    let push: ((chunk: string) => void) | undefined;
+    const app = new EasySshApp(host(written, downloads, [], (onData) => {
+      push = onData;
+    }), () => {});
+    app.setSize(80, 24);
+    app.open();
+    await flush();
+    app.onInput([{ type: 'key', key: 'enter' }]);
+    await flush();
+    push?.('\x1b]7;/root\x07notes.txt\r\n\x1b[?1000h');
+    click(app, 1, 1);
+    await flush();
+    assert.deepEqual(downloads, []);
+    assert.equal(written.join(''), '\x1b[<0;1;1M\x1b[<0;1;1m');
+  });
+
+  it('switches mouse reporting off when a program leaves it on at the prompt', async () => {
+    const shown: string[] = [];
+    let push: ((chunk: string) => void) | undefined;
+    const app = new EasySshApp(host([], [], [], (onData) => {
+      push = onData;
+    }), (data) => shown.push(data));
+    app.setSize(80, 24);
+    app.open();
+    await flush();
+    app.onInput([{ type: 'key', key: 'enter' }]);
+    await flush();
+    push?.('\x1b]7;/root\x07');
+    shown.length = 0;
+    // A full-screen program with mouse support exits without switching it off.
+    push?.('\x1b[?1049h\x1b[?1002h\x1b[?1006hvim\x1b[?1049l');
+    assert.match(shown.join(''), /\x1b\[\?1002l/);
+    shown.length = 0;
+    // A program on the main screen does the same; the next prompt clears it.
+    push?.('\x1b[?1000hprogram output\r\n\x1b]7;/root\x07$ ');
+    assert.match(shown.join(''), /\x1b\[\?1000l/);
+    shown.length = 0;
+    push?.('\x1b]7;/root\x07$ ');
+    assert.doesNotMatch(shown.join(''), /\x1b\[\?1000l/);
+  });
+});
+
 function host(
   written: string[],
   downloads: string[],
   scrolls: string[],
   capture: (onData: (chunk: string) => void) => void,
+  plainClick = false,
 ): AppHost {
   let shell = false;
   const session: FileSession = {
@@ -123,6 +199,8 @@ function host(
       scrolls.push(direction);
     },
     quit: () => {},
+    plainClick: () => plainClick,
+    downloadLabel: () => '~/Desktop',
   };
 }
 

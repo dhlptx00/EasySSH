@@ -33,6 +33,14 @@ describe('text', () => {
   it('shortens a home path and avoids name collisions', () => {
     assert.equal(shortenPath('/Users/me/Desktop/a.txt', '/Users/me', 40), '~/Desktop/a.txt');
     assert.equal(safeFileName('../notes.txt'), 'notes.txt');
+    assert.equal(safeFileName('backup_09:12.tar.gz', 'win32'), 'backup_09_12.tar.gz');
+    assert.equal(safeFileName('a<b>c"d|e?f*g.txt', 'win32'), 'a_b_c_d_e_f_g.txt');
+    assert.equal(safeFileName('notes. ', 'win32'), 'notes');
+    assert.equal(safeFileName('aux.log', 'win32'), '_aux.log');
+    assert.equal(safeFileName('CON', 'win32'), '_CON');
+    assert.equal(safeFileName('console.log', 'win32'), 'console.log');
+    assert.equal(safeFileName('捕获.PNG', 'win32'), '捕获.PNG');
+    assert.equal(safeFileName('backup_09:12.tar.gz', 'linux'), 'backup_09:12.tar.gz');
     const exists = (file: string) => file === '/tmp/notes.txt';
     assert.equal(uniqueLocalPath('/tmp', 'notes.txt', exists), '/tmp/notes (1).txt');
   });

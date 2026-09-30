@@ -2,7 +2,7 @@
   "name": "easy-ssh",
   "displayName": "Easy SSH",
   "description": "Manage SSH connections in a terminal and transfer files with the remote directory you are in. Works in VS Code and Cursor, on internal and external networks.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "easy-ssh",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -94,7 +94,12 @@
         "easySsh.downloadFolder": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Local folder for files you download. Leave empty to use the Desktop."
+          "markdownDescription": "Local folder for files you download. Leave empty to use the Desktop (on Windows, the redirected or OneDrive Desktop when there is one)."
+        },
+        "easySsh.plainClick": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Open file and folder names in the remote shell with a plain click instead of Ctrl+click (Cmd+click on macOS). This turns on terminal mouse reporting, so selecting text then needs Shift+drag (on macOS, Option+drag with `terminal.integrated.macOptionClickForcesSelection` turned on). Applies to new connections."
         },
         "easySsh.readyTimeout": {
           "type": "number",
@@ -124,6 +129,7 @@
     "@types/node": "^22.15.0",
     "@types/ssh2": "^1.15.6",
     "@types/vscode": "^1.85.0",
+    "@xterm/headless": "^5.5.0",
     "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^5.8.3"

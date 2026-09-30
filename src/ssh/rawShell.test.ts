@@ -67,4 +67,22 @@ describe('raw shell tap', () => {
   it('reads a file URL directory report', () => {
     assert.equal(normalizeCwd('file://host/home/user'), '/home/user');
   });
+
+  it('takes the folder only from the Easy SSH hook, not from other programs', () => {
+    const tap = new RawShellTap();
+    assert.equal(tap.push('\x1b]7;/home/hqxrd\x07$ ').cwd, '/home/hqxrd');
+    // A nested ssh or vte.sh reports a file:// URL for another user or host.
+    assert.equal(tap.push('\x1b]7;file://db01/root\x07# ').cwd, undefined);
+    assert.equal(tap.push('\x1b]7;file://db01/root\x07\x1b]7;/tmp\x07').cwd, '/tmp');
+  });
+
+  it('tracks mouse reporting a remote program turns on', () => {
+    const tap = new RawShellTap();
+    tap.push('\x1b]7;/\x07');
+    assert.equal(tap.push('\x1b[?1000h').mouse, true);
+    assert.equal(tap.push('x').mouse, true);
+    tap.mouseOff();
+    assert.equal(tap.push('y').mouse, false);
+    assert.equal(tap.push('\x1b[?1049h\x1b[?1049l').leftAlt, true);
+  });
 });

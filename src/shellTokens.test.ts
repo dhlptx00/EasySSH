@@ -24,4 +24,13 @@ describe('dropped paths', () => {
       ['/tmp/my file.txt'],
     );
   });
+
+  it('accepts the forms Windows drops arrive in', () => {
+    const exists = () => true;
+    // VS Code sends an extension terminal the path with / instead of \.
+    assert.deepEqual(classifyDrop('C:/Users/me/Desktop/捕获.PNG', exists, 'C:\\Users\\me'), ['C:/Users/me/Desktop/捕获.PNG']);
+    assert.deepEqual(classifyDrop('C:\\Users\\me\\my file (1).txt', exists, 'C:\\Users\\me'), ['C:\\Users\\me\\my file (1).txt']);
+    assert.deepEqual(classifyDrop('//fs01/home$/me/Desktop/a.txt', exists, 'C:\\Users\\me'), ['//fs01/home$/me/Desktop/a.txt']);
+    assert.deepEqual(classifyDrop('\\\\fs01\\home$\\me\\a.txt', exists, 'C:\\Users\\me'), ['\\\\fs01\\home$\\me\\a.txt']);
+  });
 });

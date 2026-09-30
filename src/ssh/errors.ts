@@ -16,8 +16,64 @@ export class HostKeyChangedError extends Error {
   }
 }
 
+/** Why a local file operation failed, in words. Node's own message repeats the path. */
+function localReason(err: NodeJS.ErrnoException, platform: NodeJS.Platform): string {
+  switch (err.code) {
+    case 'EACCES':
+    case 'EPERM':
+      return platform === 'darwin'
+        ? 'permission denied (allow the editor to use this folder in System Settings > Privacy & Security)'
+        : 'permission denied';
+    case 'ENOENT':
+      return 'not found';
+    case 'EBUSY':
+      return 'the file is in use by another program';
+    case 'EINVAL':
+      return 'invalid file name';
+    case 'ENOSPC':
+      return 'the disk is full';
+    case 'EISDIR':
+      return 'a folder has that name';
+    default:
+      return err.message || String(err.code ?? 'failed');
+  }
+}
+
+/**
+ * A transfer step that failed, with the operation and path it failed on,
+ * e.g. "Cannot write /srv/app/runtime/app.jar: Permission denied".
+ */
+export class TransferError extends Error {
+  override readonly name = 'TransferError';
+  /** SFTP status code (number) or Node error code (string) of the cause. */
+  readonly code: string | number | undefined;
+  readonly reason: string;
+
+  constructor(
+    readonly action: string,
+    readonly target: string,
+    readonly side: 'local' | 'remote',
+    override readonly cause: unknown,
+    platform: NodeJS.Platform = process.platform,
+  ) {
+    const errno = cause as NodeJS.ErrnoException & { code?: string | number };
+    const reason = side === 'local' && typeof errno?.code === 'string'
+      ? localReason(errno as NodeJS.ErrnoException, platform)
+      : cause instanceof Error ? cause.message || 'failed' : String(cause);
+    super(`${action} ${target}: ${reason}`);
+    this.code = errno?.code;
+    this.reason = reason;
+  }
+
+  /** True when the SSH server refused the operation (SFTP status 3). */
+  get remotePermissionDenied(): boolean {
+    return this.side === 'remote' && (this.code === 3 || /permission denied/i.test(this.reason));
+  }
+}
+
 export function humanizeSshError(err: unknown): string {
   if (err instanceof TransferCancelled) return 'Cancelled';
+  if (err instanceof TransferError) return err.message;
   if (err instanceof HostKeyChangedError) return err.message;
   if (!(err instanceof Error)) return 'Something went wrong';
   const code = (err as NodeJS.ErrnoException).code;

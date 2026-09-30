@@ -4,6 +4,8 @@ import type { BrowseEntry } from '../types';
 import { nameSpans, render } from './render';
 import { emptyDraft } from './wizard';
 
+const packageVersion: string = (require('../../package.json') as { version: string }).version;
+
 const view = {
   cols: 80,
   rows: 24,
@@ -28,7 +30,7 @@ describe('terminal screen', () => {
     assert.match(text, /Connections/);
     assert.match(text, /Commands/);
     assert.match(text, /Easy SSH/);
-    assert.match(text, /0\.1\.0/);
+    assert.ok(text.includes(`Easy SSH  ${packageVersion}`), 'header shows the package.json version');
     assert.match(text, /╭/);
     assert.ok(frame.cursor);
     assert.match(frame.lines[frame.cursor.row].plain, /> /);

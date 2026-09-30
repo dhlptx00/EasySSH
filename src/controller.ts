@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
-import path from 'path';
 import * as vscode from 'vscode';
+import { downloadFolderLabel, resolveDesktop, resolveDownloadFolder, systemProbe } from './localFolders';
 import { classifyDrop } from './shellTokens';
 import { connectionsFromHosts } from './ssh/importConfig';
 import { loadSshConfig, MissingSshConfig } from './ssh/loadConfig';
@@ -10,6 +10,7 @@ import { ConnectionStore } from './store';
 import { EasySshApp } from './terminal/app';
 import type { AppHost } from './terminal/host';
 import { EasySshPty } from './terminal/pty';
+import type { UploadQuestion } from './terminal/cwdTracking';
 import { expandHome, safeFileName, uniqueLocalPath } from './text';
 import type { ConnectionRecord, SecretUpdate } from './types';
 
@@ -38,17 +39,19 @@ function readyTimeout(): number {
   return Math.max(3000, Math.floor(value));
 }
 
-export function resolveDownloadFolder(configured: string | undefined): string {
-  const home = os.homedir();
-  if (configured && configured.trim()) {
-    const expanded = expandHome(configured.trim(), home);
-    if (fs.existsSync(expanded)) return expanded;
+function exists(file: string): boolean {
+  try {
+    return fs.existsSync(file);
+  } catch {
+    return false;
   }
-  const desktop = path.join(home, 'Desktop');
-  if (fs.existsSync(desktop)) return desktop;
-  const downloads = path.join(home, 'Downloads');
-  if (fs.existsSync(downloads)) return downloads;
-  return home;
+}
+
+/** How terminal links open: Alt when multi-cursor uses Ctrl/Cmd, else Ctrl (Cmd on macOS). */
+function linkModifier(): string {
+  const multiCursor = vscode.workspace.getConfiguration('editor').get<string>('multiCursorModifier');
+  if (multiCursor === 'ctrlCmd') return process.platform === 'darwin' ? 'Option' : 'Alt';
+  return process.platform === 'darwin' ? 'Cmd' : 'Ctrl';
 }
 
 function importId(name: string, taken: Set<string>): string {
@@ -71,6 +74,8 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
   private maximized = false;
   /** Ignores focus changes caused by closing the side bar after an icon click. */
   private settling = 0;
+  /** The real Desktop (follows Windows folder redirection and OneDrive). Looked up once. */
+  private desktop: string | null | undefined;
 
   constructor(
     private readonly store: ConnectionStore,
@@ -205,8 +210,39 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
     link.owner.activatePath(link.remotePath);
   }
 
+  private desktopFolder(): string | undefined {
+    if (this.desktop === undefined) {
+      this.desktop = resolveDesktop(systemProbe()) ?? null;
+      this.output.appendLine(`Desktop folder: ${this.desktop ?? 'not found'}`);
+    }
+    return this.desktop ?? undefined;
+  }
+
   private downloadFolder(): string {
-    return resolveDownloadFolder(vscode.workspace.getConfiguration('easySsh').get<string>('downloadFolder'));
+    const configured = vscode.workspace.getConfiguration('easySsh').get<string>('downloadFolder');
+    return resolveDownloadFolder(configured, this.desktopFolder(), os.homedir(), exists);
+  }
+
+  private plainClick(): boolean {
+    return vscode.workspace.getConfiguration('easySsh').get<boolean>('plainClick') === true;
+  }
+
+  private async confirmUpload(question: UploadQuestion): Promise<string | undefined> {
+    const here = `Upload to ${question.cwd}`;
+    const home = question.home && question.home !== question.cwd ? `Upload to ${question.home}` : undefined;
+    const other = 'Choose Folder…';
+    const buttons = [here, ...(home ? [home] : []), other];
+    const picked = await vscode.window.showWarningMessage(question.message, { modal: true, detail: question.detail }, ...buttons);
+    if (picked === here) return question.cwd;
+    if (home && picked === home) return question.home;
+    if (picked !== other) return undefined;
+    const typed = await vscode.window.showInputBox({
+      title: 'Upload to a folder on the server',
+      value: question.home ?? question.cwd,
+      prompt: `Absolute path. The upload is written as ${question.loginUser}.`,
+      validateInput: (value) => (value.trim().startsWith('/') ? undefined : 'Enter an absolute path such as /tmp'),
+    });
+    return typed?.trim() || undefined;
   }
 
   private async chooseDownloadFolder(): Promise<string | undefined> {
@@ -246,6 +282,16 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
         });
       },
       downloadFolder: () => this.downloadFolder(),
+      downloadLabel: () => downloadFolderLabel(this.downloadFolder(), this.desktopFolder(), os.homedir()),
+      plainClick: () => this.plainClick(),
+      clickLabel: () => (this.plainClick() ? 'Click' : `${linkModifier()}+click`),
+      confirmUpload: (question) => this.confirmUpload(question),
+      notify: (tone, text) => {
+        if (tone === 'error') void vscode.window.showErrorMessage(`Easy SSH: ${text}`, 'Show Log').then((choice) => {
+          if (choice) this.output.show(true);
+        });
+        else void vscode.window.showInformationMessage(`Easy SSH: ${text}`);
+      },
       home: () => os.homedir(),
       chooseDownloadFolder: () => this.chooseDownloadFolder(),
       classifyDrop: (text) => classifyDrop(text, (file) => {

@@ -1,4 +1,5 @@
 import type { BrowseEntry, ConnectionRecord, SecretUpdate, TransferState } from '../types';
+import type { UploadQuestion } from './cwdTracking';
 
 export interface FileSession {
   list(dir: string): Promise<BrowseEntry[]>;
@@ -52,4 +53,21 @@ export interface AppHost {
   /** Scroll the terminal view when a click-to-download session receives the wheel. */
   scrollTerminal(direction: 'up' | 'down'): void;
   quit(): void;
+  /**
+   * Ask where a drop should go when the shell's folder is not known.
+   * Resolves to an absolute remote folder, or undefined to cancel.
+   */
+  confirmUpload?(question: UploadQuestion): Promise<string | undefined>;
+  /** Show a notification that stays until dismissed (transfer results the status bar would hide). */
+  notify?(tone: 'info' | 'error', text: string): void;
+  /**
+   * True to open names with a plain click. That turns on terminal mouse reporting,
+   * so selecting text then needs Shift (Option on macOS). Default false: names open
+   * through the terminal link provider (Ctrl/Cmd+click) and selection works normally.
+   */
+  plainClick?(): boolean;
+  /** How a name is opened, for hints, e.g. "Ctrl+click". */
+  clickLabel?(): string;
+  /** Where downloads go, for tooltips, e.g. "the Desktop". */
+  downloadLabel?(): string;
 }

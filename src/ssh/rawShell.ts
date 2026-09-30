@@ -5,9 +5,26 @@
  */
 export interface RawShellUpdate {
   text: string;
+  /**
+   * The directory from Easy SSH's own prompt hook, which prints a plain path.
+   * file:// reports come from other programs (a nested ssh, vte.sh, a prompt theme)
+   * and may describe another user or host, so they are ignored.
+   */
   cwd?: string;
   altScreen: boolean;
   bracketedPaste: boolean;
+  /** True while the remote side has xterm mouse reporting switched on. */
+  mouse: boolean;
+  /** True when this chunk left the alternate screen, even if it also entered it. */
+  leftAlt?: boolean;
+}
+
+const MOUSE_MODES = new Set([9, 1000, 1001, 1002, 1003]);
+
+/** Easy SSH's hook prints "$PWD" as is; anything else is someone else's report. */
+export function ownCwdReport(body: string): string | undefined {
+  if (!body.startsWith('/')) return undefined;
+  return normalizeCwd(body);
 }
 
 interface ModeChange {
@@ -34,6 +51,7 @@ export class RawShellTap {
   private primed = false;
   private altScreen = false;
   private bracketedPaste = false;
+  private mouse = false;
 
   get ready(): boolean {
     return this.primed;
@@ -42,6 +60,11 @@ export class RawShellTap {
   push(chunk: string): RawShellUpdate {
     this.buffer += chunk;
     return this.drain(false);
+  }
+
+  /** Record that Easy SSH itself switched mouse reporting off. */
+  mouseOff(): void {
+    this.mouse = false;
   }
 
   /** Show whatever is still held. Used when the shell never reports a directory. */
@@ -60,7 +83,7 @@ export class RawShellTap {
       const text = mark ? slice.slice(mark.end) : slice;
       this.buffer = this.buffer.slice(cut);
       const update = this.paint(text);
-      const cwd = update.cwd ?? (mark ? normalizeCwd(mark.cwd) : undefined);
+      const cwd = update.cwd ?? (mark ? ownCwdReport(mark.cwd) : undefined);
       return { ...update, cwd };
     }
     if (cut === 0) return this.blank();
@@ -70,16 +93,24 @@ export class RawShellTap {
 
   private paint(text: string): RawShellUpdate {
     const parsed = parseRaw(text, SEQUENCE_LIMIT);
+    let leftAlt = false;
     for (const mode of parsed.modes) {
-      if (mode.code === 47 || mode.code === 1047 || mode.code === 1049) this.altScreen = mode.enable;
+      if (mode.code === 47 || mode.code === 1047 || mode.code === 1049) {
+        if (!mode.enable) leftAlt = true;
+        this.altScreen = mode.enable;
+      }
       else if (mode.code === 2004) this.bracketedPaste = mode.enable;
+      else if (MOUSE_MODES.has(mode.code)) this.mouse = mode.enable;
     }
-    const last = parsed.osc7.length ? normalizeCwd(parsed.osc7[parsed.osc7.length - 1].cwd) : undefined;
+    let last: string | undefined;
+    for (const report of parsed.osc7) last = ownCwdReport(report.cwd) ?? last;
     return {
       text,
       cwd: last,
       altScreen: this.altScreen,
       bracketedPaste: this.bracketedPaste,
+      mouse: this.mouse,
+      leftAlt: leftAlt && !this.altScreen,
     };
   }
 
@@ -88,6 +119,7 @@ export class RawShellTap {
       text: '',
       altScreen: this.altScreen,
       bracketedPaste: this.bracketedPaste,
+      mouse: this.mouse,
     };
   }
 }

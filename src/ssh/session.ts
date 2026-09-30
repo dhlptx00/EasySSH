@@ -7,7 +7,7 @@ import { Client, type ClientChannel, type ConnectConfig, type SFTPWrapper, type 
 import { remoteDirname, remoteJoin } from '../remotePath';
 import { expandHome } from '../text';
 import type { AuthMethod, BrowseEntry, ConnectionRecord, JumpSpec, SecretPayload, TransferState } from '../types';
-import { HostKeyChangedError, TransferCancelled, humanizeSshError } from './errors';
+import { HostKeyChangedError, TransferCancelled, TransferError, humanizeSshError } from './errors';
 import { SHELL_HOOK } from './shellFeed';
 
 export interface HostKeyStore {
@@ -216,12 +216,19 @@ function callbackOf<T>(run: (done: (err: Error | null | undefined, value: T) => 
   });
 }
 
+/** Turns a stream error into an error that names the operation and path. */
+export interface TransferLabels {
+  source: (err: Error) => Error;
+  destination: (err: Error) => Error;
+}
+
 export async function pipeTransfer(
   source: Readable,
   destination: Writable,
   total: number,
   onProgress: (done: number, total: number) => void,
   signal: AbortSignal,
+  labels?: TransferLabels,
 ): Promise<void> {
   if (signal.aborted) throw new TransferCancelled();
   await new Promise<void>((resolve, reject) => {
@@ -249,15 +256,38 @@ export async function pipeTransfer(
       transferred += chunk.length;
       onProgress(transferred, total);
     });
-    source.on('error', (err) => finish(err));
+    source.on('error', (err) => finish(labels ? labels.source(err) : err));
     meter.on('error', (err) => finish(err));
-    destination.on('error', (err) => finish(err));
+    destination.on('error', (err) => finish(labels ? labels.destination(err) : err));
     // A normal file emits finish. ssh2's remote write stream destroys itself
     // inside _final, and current Node then emits close without finish.
     destination.on('finish', () => finish());
     destination.on('close', () => finish());
     source.pipe(meter).pipe(destination);
   });
+}
+
+/**
+ * Rename a finished download into place. On Windows an antivirus scanner or the
+ * search indexer can hold the new file for a moment, so EPERM/EBUSY/EACCES retry.
+ */
+export async function renameWithRetry(
+  from: string,
+  to: string,
+  rename: (from: string, to: string) => Promise<void> = fs.promises.rename,
+  attempts = 10,
+  delayMs = 200,
+): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (attempt >= attempts || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) throw err;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
 }
 
 interface UploadPlan {
@@ -293,15 +323,23 @@ async function collectUploads(
   let skipped = 0;
 
   const walk = async (local: string, remote: string, label: string, top: boolean) => {
-    const linked = await fs.promises.lstat(local);
+    const linked = await fs.promises.lstat(local).catch((err: unknown) => {
+      throw new TransferError('Cannot read', local, 'local', err);
+    });
     if (linked.isSymbolicLink() && !top) {
       skipped += 1;
       return;
     }
-    const stat = linked.isSymbolicLink() ? await fs.promises.stat(local) : linked;
+    const stat = linked.isSymbolicLink()
+      ? await fs.promises.stat(local).catch((err: unknown) => {
+        throw new TransferError('Cannot read', local, 'local', err);
+      })
+      : linked;
     if (stat.isDirectory()) {
       directories.push({ remote, mode: uploadMode(stat.mode, DEFAULT_DIR_MODE) });
-      const children = await fs.promises.readdir(local);
+      const children = await fs.promises.readdir(local).catch((err: unknown) => {
+        throw new TransferError('Cannot read folder', local, 'local', err);
+      });
       for (const child of children) {
         await walk(path.join(local, child), remoteJoin(remote, child), `${label}/${child}`, false);
       }
@@ -407,20 +445,32 @@ export class SshSession {
   ): Promise<void> {
     const stat = await callbackOf<import('ssh2').Stats>((done) => {
       this.sftp.stat(remotePath, (err, stats) => done(err, stats));
+    }).catch((err: unknown) => {
+      throw new TransferError('Cannot read', remotePath, 'remote', err);
     });
     const total = asCount(stat.size);
     const partial = `${localPath}.part`;
-    await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
+    const folder = path.dirname(localPath);
+    await fs.promises.mkdir(folder, { recursive: true }).catch((err: unknown) => {
+      throw new TransferError('Cannot create folder', folder, 'local', err);
+    });
     try {
       if (total === 0) {
-        await fs.promises.writeFile(localPath, Buffer.alloc(0));
+        await fs.promises.writeFile(localPath, Buffer.alloc(0)).catch((err: unknown) => {
+          throw new TransferError('Cannot write', localPath, 'local', err);
+        });
         onProgress(0, 0);
         return;
       }
       const source = this.sftp.createReadStream(remotePath);
       const destination = fs.createWriteStream(partial);
-      await pipeTransfer(source, destination, total, onProgress, signal);
-      await fs.promises.rename(partial, localPath);
+      await pipeTransfer(source, destination, total, onProgress, signal, {
+        source: (err) => new TransferError('Cannot read', remotePath, 'remote', err),
+        destination: (err) => new TransferError('Cannot write', localPath, 'local', err),
+      });
+      await renameWithRetry(partial, localPath).catch((err: unknown) => {
+        throw new TransferError('Cannot save', localPath, 'local', err);
+      });
     } catch (err) {
       await fs.promises.rm(partial, { force: true }).catch(() => undefined);
       throw err;
@@ -456,6 +506,10 @@ export class SshSession {
           });
         },
         signal,
+        {
+          source: (err) => new TransferError('Cannot read', file.local, 'local', err),
+          destination: (err) => new TransferError('Cannot write', file.remote, 'remote', err),
+        },
       );
     }
     return { uploaded: files.length, skipped };
@@ -537,7 +591,7 @@ export class SshSession {
       });
     } catch (err) {
       const kind = await this.kindOf(dir).catch(() => 'missing' as const);
-      if (kind !== 'dir') throw err;
+      if (kind !== 'dir') throw err instanceof TransferError ? err : new TransferError('Cannot create folder', dir, 'remote', err);
     }
   }
 }

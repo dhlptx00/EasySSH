@@ -97,9 +97,21 @@ export function shortenPath(input: string, home: string, width: number): string 
   return text.slice(0, head) + '…' + text.slice(text.length - tail);
 }
 
-export function safeFileName(name: string): string {
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])(\.|$)/i;
+
+/**
+ * A local file name for a remote file. On Windows, characters Windows does not
+ * allow (<>:"|?*) become _, trailing dots and spaces are dropped, and reserved
+ * device names such as CON or aux.log get a leading _. A colon would otherwise
+ * write into an NTFS alternate data stream.
+ */
+export function safeFileName(name: string, platform: NodeJS.Platform = process.platform): string {
   const base = name.split(/[/\\]/).pop() || 'download';
-  const cleaned = base.replace(/[\u0000-\u001f]/g, '').trim();
+  let cleaned = base.replace(/[\u0000-\u001f]/g, '').trim();
+  if (platform === 'win32') {
+    cleaned = cleaned.replace(/[<>:"|?*]/g, '_').replace(/[. ]+$/, '');
+    if (WINDOWS_RESERVED.test(cleaned)) cleaned = `_${cleaned}`;
+  }
   if (!cleaned || cleaned === '.' || cleaned === '..') return 'download';
   return cleaned;
 }

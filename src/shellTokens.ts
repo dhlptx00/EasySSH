@@ -55,7 +55,7 @@ function fromFileUrl(token: string): string {
 }
 
 function looksLikePath(path: string): boolean {
-  return path.startsWith('/') || path.startsWith('~/') || path.startsWith('~\\') || /^[A-Za-z]:[\\/]/.test(path);
+  return path.startsWith('/') || path.startsWith('~/') || path.startsWith('~\\') || /^[A-Za-z]:[\\/]/.test(path) || /^\\\\[^\\]/.test(path);
 }
 
 /**

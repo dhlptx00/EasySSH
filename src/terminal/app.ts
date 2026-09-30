@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { withParent } from '../entries';
-import { HostKeyChangedError, TransferCancelled, humanizeSshError } from '../ssh/errors';
-import { remoteBasename } from '../remotePath';
+import { HostKeyChangedError, TransferCancelled, TransferError, humanizeSshError } from '../ssh/errors';
+import { remoteBasename, remoteJoin } from '../remotePath';
 import { RawShellTap, type RawShellUpdate } from '../ssh/rawShell';
 import { shellQuote } from '../ssh/shellFeed';
 import { safeFileName, shortenPath } from '../text';
@@ -14,6 +14,7 @@ import { defaultSlashPick, matchSlashCommands, parseConnectionCommand, type Slas
 import { peelPointer, type PointerEvent } from './pointer';
 import { linkAt, nameSpans, paint, render, sessionHint, type LineLink } from './render';
 import { Viewport } from './viewport';
+import { classifyStale, isHostSwitch, isUserSwitch, staleUploadQuestion, type StaleCwd } from './cwdTracking';
 import type { ConnectionItem, Screen } from './screen';
 import { applyChoice, applyStep, choiceIndex, choiceOptions, draftFromRecord, emptyDraft, nextStep, prevStep, toConnection } from './wizard';
 
@@ -24,6 +25,12 @@ interface RemoteShell {
   entries: BrowseEntry[];
   transfer?: TransferState;
 }
+
+/** xterm mouse reporting, used only in plain-click mode. */
+const MOUSE_ON = '\x1b[?1000h\x1b[?1006h';
+const MOUSE_OFF = '\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l';
+/** How long after Enter the prompt hook may take to report before the folder counts as unknown. */
+const REPORT_GRACE_MS = 1500;
 
 function describe(record: ConnectionRecord): ConnectionItem {
   const auth = record.auth === 'privateKey' ? 'key' : record.auth;
@@ -68,6 +75,17 @@ export class EasySshApp {
   private tabEpoch = 0;
   private readonly inputLine = new InputLine();
   private closed = false;
+  /** Plain click opens names (mouse reporting on). Otherwise Ctrl/Cmd+click through the link provider. */
+  private plainClick = false;
+  private loginUser = '';
+  private hostName = '';
+  /** Folder reports from the prompt hook since this connection opened. */
+  private cwdReports = 0;
+  /** When a command was submitted that the prompt hook has not answered yet. */
+  private awaitingSince: number | undefined;
+  /** Command lines submitted since the last folder report (null when the line was not tracked). */
+  private pendingCommands: (string | null)[] = [];
+  private reportWaiters: (() => void)[] = [];
 
   constructor(
     private readonly host: AppHost,
@@ -120,7 +138,7 @@ export class EasySshApp {
   linkFor(line: string): LineLink[] {
     if (this.raw) {
       if (this.remoteAlt || !this.remote) return [];
-      return nameSpans(line, this.remote.entries);
+      return nameSpans(line, this.remote.entries, this.downloadLabel());
     }
     const found = this.links.get(line) ?? this.links.get(line.trimEnd());
     if (found) return found;
@@ -524,15 +542,85 @@ export class EasySshApp {
       this.inputLine.forget();
     }
     if (update.text) this.present(update.text);
-    if (wasAlt && !update.altScreen) {
+    if ((wasAlt || update.leftAlt) && !update.altScreen) {
       this.inputLine.reset();
-      this.present('\x1b[?1000h\x1b[?1006h');
+      if (this.plainClick) this.present(MOUSE_ON);
+      else if (update.mouse) this.mouseOff();
     }
+    if (update.cwd !== undefined) this.onCwdReport(update.altScreen, update.mouse);
     if (!update.cwd || !this.remote || update.cwd === this.remote.cwd) return;
     this.remote = { ...this.remote, cwd: update.cwd };
     this.host.setStatus(`${this.remote.title}:${update.cwd}`);
     const cwd = update.cwd;
     void this.enqueue(() => this.refreshListing(cwd));
+  }
+
+  /** The prompt hook printed the folder, so the shell Easy SSH set up is at its prompt again. */
+  private onCwdReport(altScreen: boolean, mouse: boolean): void {
+    this.cwdReports += 1;
+    this.awaitingSince = undefined;
+    this.pendingCommands = [];
+    const waiters = this.reportWaiters;
+    this.reportWaiters = [];
+    for (const wake of waiters) wake();
+    // A prompt never needs mouse reporting. A program that exited without
+    // switching it off would otherwise block text selection.
+    if (!this.plainClick && !altScreen && mouse) this.mouseOff();
+  }
+
+  private mouseOff(): void {
+    this.present(MOUSE_OFF);
+    this.tap.mouseOff();
+  }
+
+  /** Track Enter so a missing folder report after it can be noticed. */
+  private noteSubmitted(tracked: string, typed: boolean): void {
+    if (!/[\r\n]/.test(tracked)) return;
+    const lines = tracked.split(/\r\n|\r|\n/);
+    const done = lines.slice(0, -1);
+    if (typed) {
+      const before = this.inputLine.text();
+      done.splice(1);
+      done[0] = before === null ? '\u0000' : before + done[0];
+    }
+    if (this.awaitingSince === undefined) this.awaitingSince = Date.now();
+    for (const line of done) {
+      if (line === '\u0000') this.pendingCommands.push(null);
+      else if (line.trim()) this.pendingCommands.push(line.trim());
+    }
+    if (this.pendingCommands.length > 20) this.pendingCommands.splice(0, this.pendingCommands.length - 20);
+  }
+
+  /** Undefined while the tracked folder is current; otherwise why it is not. */
+  private async staleCwd(): Promise<StaleCwd | undefined> {
+    if (this.awaitingSince === undefined) return undefined;
+    const wait = REPORT_GRACE_MS - (Date.now() - this.awaitingSince);
+    if (wait > 0) await this.waitForReport(wait);
+    if (this.awaitingSince === undefined) return undefined;
+    const commands = this.pendingCommands;
+    const kind = classifyStale(commands);
+    const command = kind === 'user'
+      ? commands.find(isUserSwitch)
+      : kind === 'host'
+        ? commands.find(isHostSwitch)
+        : commands.find((line) => !!line);
+    return { kind, command: command ?? null, everReported: this.cwdReports > 0 };
+  }
+
+  private waitForReport(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const wake = () => {
+        clearTimeout(timer);
+        this.reportWaiters = this.reportWaiters.filter((item) => item !== wake);
+        resolve();
+      };
+      const timer = setTimeout(wake, ms);
+      this.reportWaiters.push(wake);
+    });
+  }
+
+  private downloadLabel(): string {
+    return this.host.downloadLabel?.() ?? 'the Desktop';
   }
 
   private onShellClosed(): void {
@@ -563,10 +651,11 @@ export class EasySshApp {
     this.rawBuffer = '';
     this.tabEpoch += 1;
     this.inputLine.reset();
+    this.plainClick = this.host.plainClick?.() ?? false;
     const dim = '\x1b[38;2;106;106;106m';
-    const hint = sessionHint();
+    const hint = sessionHint(this.host.clickLabel?.() ?? (this.plainClick ? 'Click' : 'Ctrl+click'));
     const lines = [...notes.map((note) => `${dim}${note}\x1b[0m`), hint.styled].join('\r\n');
-    this.present(`\x1b[?1049l\x1b[?25h\x1b[0m\x1b[2J\x1b[3J\x1b[H${lines}\r\n\x1b[?1000h\x1b[?1006h`);
+    this.present(`\x1b[?1049l\x1b[?25h\x1b[0m\x1b[2J\x1b[3J\x1b[H${lines}\r\n${this.plainClick ? MOUSE_ON : ''}`);
   }
 
   /** Show bytes in the terminal and keep a copy for click hit-testing. */
@@ -586,7 +675,7 @@ export class EasySshApp {
     this.raw = false;
     this.remoteAlt = false;
     this.remotePaste = false;
-    this.emit('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?2004h\x1b[?1049h\x1b[0m');
+    this.emit('\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?2004h\x1b[?1049h\x1b[0m');
   }
 
   private flushPendingRaw(): void {
@@ -642,7 +731,9 @@ export class EasySshApp {
   }
 
   private onLocalPointer(event: PointerEvent): void {
-    if (this.remoteAlt) {
+    // Mouse reports only reach Easy SSH in plain-click mode or when a remote
+    // program asked for them. In the second case they belong to that program.
+    if (this.remoteAlt || !this.plainClick) {
       this.writeShell(event.raw);
       return;
     }
@@ -661,7 +752,7 @@ export class EasySshApp {
     const down = this.pointerDown;
     this.pointerDown = undefined;
     if (!down || down.col !== event.col || down.row !== event.row) return;
-    const link = linkAt(this.viewport.cells(event.row), event.col - 1, this.remote.entries);
+    const link = linkAt(this.viewport.cells(event.row), event.col - 1, this.remote.entries, this.downloadLabel());
     if (link) this.activatePath(link.remotePath);
   }
 
@@ -674,6 +765,7 @@ export class EasySshApp {
       else void this.enqueue(() => this.upload(drop));
       return;
     }
+    if (!this.remoteAlt) this.noteSubmitted(tracked, remember);
     if (remember) this.inputLine.observe(tracked);
     this.writeShell(wire);
   }
@@ -780,6 +872,11 @@ export class EasySshApp {
     this.browseEpoch += 1;
     const abort = new AbortController();
     this.connectAbort = abort;
+    this.loginUser = record.username;
+    this.hostName = record.host;
+    this.cwdReports = 0;
+    this.awaitingSince = undefined;
+    this.pendingCommands = [];
     this.screen = { kind: 'connecting', label: `${record.username}@${record.host}:${record.port}` };
     this.draw();
     this.host.log(`Connecting to ${record.username}@${record.host}:${record.port}`);
@@ -940,9 +1037,10 @@ export class EasySshApp {
     } catch (err) {
       if (epoch !== this.browseEpoch || !this.remote) return;
       const message = abort.signal.aborted ? 'Download cancelled' : humanizeSshError(err);
-      this.host.log(message);
+      this.host.log(`Download of ${remotePath} failed: ${message}`);
       this.remote = { ...this.remote, transfer: undefined };
       this.finishTransfer(message);
+      if (!abort.signal.aborted) this.host.notify?.('error', `Download failed. ${message}`);
     } finally {
       if (this.transferAbort === abort) this.transferAbort = null;
     }
@@ -954,10 +1052,28 @@ export class EasySshApp {
       this.showNotice('error', 'Wait for the current transfer to finish');
       return;
     }
+    const session = this.session;
+    const epoch = this.browseEpoch;
+    let cwd = this.remote.cwd;
+    let asUser = '';
+    const names = paths.map((item) => item.split(/[/\\]/).filter(Boolean).pop() || item);
+    const stale = await this.staleCwd();
+    if (stale) {
+      if (epoch !== this.browseEpoch || !this.remote || this.session !== session) return;
+      const home = await session.resolve('~', cwd).then((found) => found.path).catch(() => undefined);
+      const question = staleUploadQuestion(stale, cwd, this.loginUser, this.hostName, names, home);
+      this.host.log(`Upload of ${names.join(', ')}: ${question.detail}`);
+      const picked = this.host.confirmUpload ? await this.host.confirmUpload(question) : undefined;
+      if (epoch !== this.browseEpoch || !this.remote || this.session !== session) return;
+      if (!picked) {
+        this.finishTransfer('Upload cancelled');
+        return;
+      }
+      cwd = picked;
+      asUser = ` as ${this.loginUser}`;
+    }
     const abort = new AbortController();
     this.transferAbort = abort;
-    const epoch = this.browseEpoch;
-    const cwd = this.remote.cwd;
     const transfer: TransferState = {
       direction: 'upload',
       label: paths.length === 1 ? paths[0].split(/[/\\]/).pop() || 'file' : `${paths.length} items`,
@@ -983,15 +1099,25 @@ export class EasySshApp {
       const skipped = result.skipped ? `, skipped ${result.skipped}` : '';
       const text = result.uploaded === 0 && result.skipped === 0
         ? 'Nothing to upload'
-        : `Uploaded ${result.uploaded} to ${cwd}${skipped}`;
+        : `Uploaded ${result.uploaded} to ${cwd}${asUser}${skipped}`;
+      this.host.log(text);
       this.remote = { ...this.remote, transfer: undefined };
       this.finishTransfer(text);
-      await this.refreshEntries();
+      if (stale && result.uploaded > 0) {
+        const move = stale.kind === 'user' && names.length === 1
+          ? ` To move it, run sudo mv ${shellQuote(remoteJoin(cwd, names[0]))} <folder> in the terminal.`
+          : '';
+        this.host.notify?.('info', `${text}.${move}`);
+      }
+      await this.refreshAfterUpload();
     } catch (err) {
       if (epoch !== this.browseEpoch || !this.remote) return;
-      const message = abort.signal.aborted ? 'Upload cancelled' : humanizeSshError(err);
+      let message = abort.signal.aborted ? 'Upload cancelled' : humanizeSshError(err);
+      if (err instanceof TransferError && err.remotePermissionDenied) message += ` (SFTP user ${this.loginUser})`;
+      this.host.log(`Upload to ${cwd} failed: ${message}`);
       this.remote = { ...this.remote, transfer: undefined };
       this.finishTransfer(message);
+      if (!abort.signal.aborted) this.host.notify?.('error', `Upload failed. ${message}`);
     } finally {
       if (this.transferAbort === abort) this.transferAbort = null;
     }
@@ -1010,7 +1136,8 @@ export class EasySshApp {
     }
   }
 
-  private async refreshEntries(): Promise<void> {
+  /** Relist after an upload. A folder SFTP can write but not read must not turn a success into an error. */
+  private async refreshAfterUpload(): Promise<void> {
     if (!this.session || !this.remote) return;
     const epoch = this.browseEpoch;
     const cwd = this.remote.cwd;
@@ -1019,7 +1146,7 @@ export class EasySshApp {
       if (epoch !== this.browseEpoch || !this.remote) return;
       this.remote = { ...this.remote, entries, transfer: undefined };
     } catch (err) {
-      this.showNotice('error', humanizeSshError(err));
+      this.host.log(`Could not list ${cwd} after the upload: ${humanizeSshError(err)}`);
     }
   }
 

@@ -5,8 +5,8 @@ import path from 'path';
 import { Readable, Writable } from 'stream';
 import { describe, it } from 'node:test';
 import type { SFTPWrapper } from 'ssh2';
-import { DEFAULT_DIR_MODE, DEFAULT_FILE_MODE, SshSession, pipeTransfer, uploadMode } from './session';
-import { TransferCancelled } from './errors';
+import { DEFAULT_DIR_MODE, DEFAULT_FILE_MODE, SshSession, pipeTransfer, renameWithRetry, uploadMode } from './session';
+import { TransferCancelled, TransferError, humanizeSshError } from './errors';
 
 /** Matches ssh2's write stream: destroy inside _final, then close and no finish. */
 class RemoteWrite extends Writable {
@@ -84,6 +84,41 @@ class FakeSftp {
     return new RemoteWrite();
   }
 }
+
+describe('transfer errors', () => {
+  it('names the operation and the path', async () => {
+    const denied = Object.assign(new Error('Permission denied'), { code: 3 });
+    const remote = new TransferError('Cannot write', '/srv/app/runtime/app.jar', 'remote', denied);
+    assert.equal(humanizeSshError(remote), 'Cannot write /srv/app/runtime/app.jar: Permission denied');
+    assert.equal(remote.remotePermissionDenied, true);
+    const local = new TransferError('Cannot read', 'C:\\Users\\me\\a.txt', 'local', Object.assign(new Error("EBUSY: resource busy or locked, open 'C:\\Users\\me\\a.txt'"), { code: 'EBUSY' }), 'win32');
+    assert.equal(local.message, 'Cannot read C:\\Users\\me\\a.txt: the file is in use by another program');
+    assert.equal(local.remotePermissionDenied, false);
+  });
+
+  it('labels which side of a transfer failed', async () => {
+    const source = new Readable({ read() { this.destroy(Object.assign(new Error('No such file'), { code: 2 })); } });
+    await assert.rejects(
+      pipeTransfer(source, new RemoteWrite(), 5, () => {}, new AbortController().signal, {
+        source: (err) => new TransferError('Cannot read', '/var/log/a.log', 'remote', err),
+        destination: (err) => new TransferError('Cannot write', 'C:\\a.log', 'local', err),
+      }),
+      /Cannot read \/var\/log\/a\.log: No such file/,
+    );
+  });
+
+  it('retries a rename that antivirus briefly blocks', async () => {
+    let tries = 0;
+    await renameWithRetry('a.part', 'a', async () => {
+      tries += 1;
+      if (tries < 3) throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    }, 5, 1);
+    assert.equal(tries, 3);
+    await assert.rejects(renameWithRetry('a.part', 'a', async () => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    }, 5, 1), /ENOENT/);
+  });
+});
 
 describe('upload permissions', () => {
   it('keeps the local permission bits and falls back to 0644 / 0755', () => {

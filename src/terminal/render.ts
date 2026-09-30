@@ -49,7 +49,8 @@ const FG: Record<Tone, string> = {
   border: '64;64;64',
 };
 
-const VERSION = '0.1.0';
+// Read from package.json at build time (esbuild inlines it), so the header never goes stale.
+const VERSION: string = (require('../../package.json') as { version: string }).version;
 const PROMPT_BLOCK = 3;
 const FRAME_GAP = 1;
 
@@ -213,12 +214,13 @@ function renderPanel(screen: Exclude<Screen, { kind: 'connections' }>, view: Ren
 }
 
 /** One quiet line shown above the login shell. */
-export function sessionHint(): { plain: string; styled: string } {
+/** The line shown when a shell opens. `click` is how names open, e.g. "Ctrl+click". */
+export function sessionHint(click = 'Click'): { plain: string; styled: string } {
   const gold = '\x1b[38;2;250;178;131m';
   const dim = '\x1b[38;2;106;106;106m';
   const reset = '\x1b[0m';
   const parts = [
-    { text: 'Click', color: gold },
+    { text: click, color: gold },
     { text: 'a file name to download', color: dim },
     { text: '·', color: dim },
     { text: 'drag files to upload', color: dim },
@@ -232,7 +234,7 @@ export function sessionHint(): { plain: string; styled: string } {
 }
 
 /** The file or directory under a 0-based screen column. */
-export function linkAt(cells: readonly string[], column: number, entries: BrowseEntry[]): LineLink | undefined {
+export function linkAt(cells: readonly string[], column: number, entries: BrowseEntry[], downloadLabel?: string): LineLink | undefined {
   if (column < 0) return undefined;
   let text = '';
   const origin: number[] = [];
@@ -242,7 +244,7 @@ export function linkAt(cells: readonly string[], column: number, entries: Browse
     origin.push(index);
     text += cell;
   }
-  for (const span of nameSpans(text, entries)) {
+  for (const span of nameSpans(text, entries, downloadLabel)) {
     const start = origin[span.start];
     if (start === undefined) continue;
     const endChar = span.start + span.length;
@@ -252,7 +254,7 @@ export function linkAt(cells: readonly string[], column: number, entries: Browse
   return undefined;
 }
 
-export function nameSpans(plain: string, entries: BrowseEntry[]): LineLink[] {
+export function nameSpans(plain: string, entries: BrowseEntry[], downloadLabel = 'the Desktop'): LineLink[] {
   const ranked = entries
     .filter((entry) => entry.name && entry.name !== '..' && entry.name !== '.')
     .sort((a, b) => b.name.length - a.name.length || a.name.localeCompare(b.name));
@@ -276,7 +278,7 @@ export function nameSpans(plain: string, entries: BrowseEntry[]): LineLink[] {
           length: entry.name.length,
           remotePath: entry.path,
           kind,
-          tooltip: kind === 'dir' ? `cd ${entry.name}` : `Download ${entry.name} to the Desktop`,
+          tooltip: kind === 'dir' ? `cd ${entry.name}` : `Download ${entry.name} to ${downloadLabel}`,
         });
       }
       from = at + Math.max(1, entry.name.length);
