@@ -1,5 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <path fill="#C5C5C5" fill-rule="evenodd" d="M4 3.5h16c1.1 0 2 .9 2 2v13c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2v-13c0-1.1.9-2 2-2zm1.7 1.7v11.6h12.6V5.2H5.7z"/>
-  <path fill="#C5C5C5" d="M6.15 8.1 10.2 12l-4.05 3.9 1.25 1.3L12.7 12 7.4 6.8 6.15 8.1z"/>
-  <path fill="#C5C5C5" d="M12.4 15.15h6.1v1.55h-6.1z"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M13 17.5 H5 a2 2 0 0 1 -2 -2 V6 a2 2 0 0 1 2 -2 H17 a2 2 0 0 1 2 2 V11"/>
+  <path d="M3 7.5 H19"/>
+  <polyline points="6,10.5 8.5,12.75 6,15"/>
+  <line x1="10.5" y1="15" x2="13" y2="15"/>
+  <g transform="rotate(-45 18 18)">
+    <rect x="14" y="16.4" width="5" height="3.2" rx="1.6"/>
+    <rect x="17" y="16.4" width="5" height="3.2" rx="1.6"/>
+  </g>
 </svg>

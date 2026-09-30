@@ -18,3 +18,4 @@ package-lock.json
 **/*.test.js
 **/*.vsix
 **/*.log
+media/icon.svg
