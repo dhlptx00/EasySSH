@@ -2,7 +2,7 @@
   "name": "easy-ssh",
   "displayName": "Easy SSH",
   "description": "Manage SSH connections in a terminal and transfer files with the remote directory you are in. Works in VS Code and Cursor, on internal and external networks.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "easy-ssh",
   "license": "MIT",
   "icon": "media/icon.png",
