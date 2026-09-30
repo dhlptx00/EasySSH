@@ -66,7 +66,22 @@ describe('connection command line', () => {
       { type: 'text', text: 'new' },
       { type: 'key', key: 'enter' },
     ]);
-    assert.match(text, /new connection/);
+    assert.match(text, /New connection/);
+  });
+
+  it('connects from a connection command and moves through the command group', async () => {
+    const connected = await run([
+      { type: 'text', text: '/prod' },
+      { type: 'key', key: 'enter' },
+    ]);
+    assert.match(connected, /Connecting to root@10\.0\.0\.8:22/);
+
+    const created = await run([
+      { type: 'text', text: '/' },
+      { type: 'key', key: 'down' },
+      { type: 'key', key: 'enter' },
+    ]);
+    assert.match(created, /New connection/);
   });
 
   it('opens the editor from /edit and asks before /delete', async () => {
@@ -74,7 +89,7 @@ describe('connection command line', () => {
       { type: 'text', text: '/edit' },
       { type: 'key', key: 'enter' },
     ]);
-    assert.match(edited, /edit prod/);
+    assert.match(edited, /Edit prod/);
 
     const deleted = await run([
       { type: 'text', text: '/delete' },

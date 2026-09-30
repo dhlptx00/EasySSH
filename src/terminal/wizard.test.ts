@@ -42,7 +42,20 @@ describe('connection wizard', () => {
   it('rejects a duplicate name and a bad port', () => {
     const draft = emptyDraft();
     assert.match(applyStep('name', 'lab', draft, ctx).error ?? '', /already exists/);
+    assert.match(applyStep('name', 'new', draft, ctx).error ?? '', /system command/);
     const withPort = { ...draft, port: '22' };
     assert.match(applyStep('port', '70000', withPort, ctx).error ?? '', /65535/);
+  });
+
+  it('chooses auth, the remote path, and a jump host', () => {
+    let draft = emptyDraft();
+    draft = applyStep('auth', 'agent', draft, ctx).draft;
+    assert.equal(draft.auth, 'agent');
+    assert.equal(nextStep('auth', draft), 'startPathChoice');
+    draft = applyStep('startPathChoice', 'home', draft, ctx).draft;
+    assert.equal(nextStep('startPathChoice', draft), 'jumpChoice');
+    draft = applyStep('jumpChoice', 'none', draft, ctx).draft;
+    assert.equal(nextStep('jumpChoice', draft), 'done');
+    assert.equal(draft.jump, '');
   });
 });

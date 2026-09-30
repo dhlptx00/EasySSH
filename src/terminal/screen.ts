@@ -10,7 +10,7 @@ export interface ConnectionItem {
 
 export type Screen =
   | { kind: 'loading' }
-  | { kind: 'connections'; items: ConnectionItem[]; selected: number; notice?: Notice; command: string }
+  | { kind: 'connections'; items: ConnectionItem[]; selected: number; notice?: Notice; command: string; pick: number }
   | { kind: 'confirm'; item: ConnectionItem; choice: number; notice?: Notice }
   | {
       kind: 'wizard';
@@ -18,6 +18,8 @@ export type Screen =
       draft: Draft;
       step: Step;
       input: string;
+      /** Index into the current choice list. Ignored on typed steps. */
+      pick: number;
       error?: string;
       notice?: Notice;
     }

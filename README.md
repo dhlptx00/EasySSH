@@ -20,10 +20,11 @@ Click the **Easy SSH** icon in the activity bar. The connection panel opens as a
 
 ## Commands
 
-On the connection panel, type a command and press Enter. Up and Down move the selection.
+On the connection panel, type `/` to open the command list. Connections and system commands are listed in separate groups. Up and Down move through the list, further typing filters it, and Enter runs the highlighted row. With the list closed, Up and Down move the connection selection.
 
 | Command | Action |
 | --- | --- |
+| /name | Connect to the saved connection with that name |
 | /new | New connection |
 | /edit | Edit the selected connection |
 | /delete | Delete the selected connection |
@@ -46,7 +47,7 @@ On the connection panel, type a command and press Enter. Up and Down move the se
 | q | Disconnect |
 | Ctrl+C | Cancel a transfer, or leave the current prompt |
 
-Passwords and key passphrases are hidden while you type. Press Enter on a saved secret to keep it. For a jump host, type `user@host:port`. Separate extra hops with commas. Type `none` to clear a jump host, and `home` to open your remote home directory.
+Passwords and key passphrases are hidden while you type. Press Enter on a saved secret to keep it. Authentication, the remote directory, and the jump host are choices: move with Up and Down, then press Enter. A custom path or jump host is the only extra text. For a jump host, type `user@host:port`. Separate extra hops with commas.
 
 ## Downloads and uploads
 

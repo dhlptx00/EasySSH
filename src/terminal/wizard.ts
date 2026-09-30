@@ -1,6 +1,7 @@
 import { formatJumps, parseJumpList } from '../ssh/jump';
 import { expandHome } from '../text';
 import type { AuthMethod, ConnectionRecord, JumpSpec, SecretUpdate } from '../types';
+import { isReservedCommand } from './commands';
 
 export type Step =
   | 'name'
@@ -11,7 +12,9 @@ export type Step =
   | 'password'
   | 'keyPath'
   | 'passphrase'
+  | 'startPathChoice'
   | 'startPath'
+  | 'jumpChoice'
   | 'jump';
 
 export interface Draft {
@@ -26,7 +29,11 @@ export interface Draft {
   passphrase: string;
   keepPassphrase: boolean;
   startPath: string;
+  /** home opens the remote home directory. custom asks for a path. */
+  startMode: '' | 'home' | 'custom';
   jump: string;
+  /** none connects directly. custom asks for user@host:port. */
+  jumpMode: '' | 'none' | 'custom';
   hasSavedPassword: boolean;
   hasSavedPassphrase: boolean;
   originalJump: string;
@@ -54,7 +61,9 @@ export function emptyDraft(): Draft {
     passphrase: '',
     keepPassphrase: false,
     startPath: '',
+    startMode: '',
     jump: '',
+    jumpMode: '',
     hasSavedPassword: false,
     hasSavedPassphrase: false,
     originalJump: '',
@@ -77,7 +86,9 @@ export function draftFromRecord(
     auth: record.auth,
     keyPath: record.privateKeyPath ?? '',
     startPath: record.startPath ?? '',
+    startMode: record.startPath ? 'custom' : 'home',
     jump,
+    jumpMode: record.jumps.length ? 'custom' : 'none',
     hasSavedPassword: saved.password,
     hasSavedPassphrase: saved.passphrase,
     keepPassword: saved.password,
@@ -101,15 +112,19 @@ export function nextStep(step: Step, draft: Draft): Step | 'done' {
     case 'auth':
       if (draft.auth === 'password') return 'password';
       if (draft.auth === 'privateKey') return 'keyPath';
-      return 'startPath';
+      return 'startPathChoice';
     case 'password':
-      return 'startPath';
+      return 'startPathChoice';
     case 'keyPath':
       return 'passphrase';
     case 'passphrase':
-      return 'startPath';
+      return 'startPathChoice';
+    case 'startPathChoice':
+      return draft.startMode === 'custom' ? 'startPath' : 'jumpChoice';
     case 'startPath':
-      return 'jump';
+      return 'jumpChoice';
+    case 'jumpChoice':
+      return draft.jumpMode === 'custom' ? 'jump' : 'done';
     case 'jump':
       return 'done';
     default: {
@@ -137,12 +152,16 @@ export function prevStep(step: Step, draft: Draft): Step | 'start' {
       return 'auth';
     case 'passphrase':
       return 'keyPath';
-    case 'startPath':
+    case 'startPathChoice':
       if (draft.auth === 'password') return 'password';
       if (draft.auth === 'privateKey') return 'passphrase';
       return 'auth';
+    case 'startPath':
+      return 'startPathChoice';
+    case 'jumpChoice':
+      return draft.startMode === 'custom' ? 'startPath' : 'startPathChoice';
     case 'jump':
-      return 'startPath';
+      return 'jumpChoice';
     default: {
       const unreachable: never = step;
       return unreachable;
@@ -180,7 +199,7 @@ export function promptFor(step: Step, draft: Draft): Prompt {
     case 'auth':
       return {
         label: 'auth',
-        hint: 'password, key, or agent',
+        hint: 'Choose how to sign in',
         masked: false,
         fallback: authWord(draft.auth),
       };
@@ -202,17 +221,21 @@ export function promptFor(step: Step, draft: Draft): Prompt {
         masked: true,
         fallback: '',
       };
+    case 'startPathChoice':
+      return { label: 'remote path', hint: 'Choose where the session opens', masked: false, fallback: '' };
     case 'startPath':
       return {
         label: 'remote path',
-        hint: 'Absolute path, or type home. Empty uses the value in brackets or your home directory',
+        hint: 'Absolute path on the server, such as /var/www',
         masked: false,
         fallback: draft.startPath,
       };
+    case 'jumpChoice':
+      return { label: 'jump host', hint: 'Choose a direct connection or a jump host', masked: false, fallback: '' };
     case 'jump':
       return {
         label: 'jump host',
-        hint: 'Optional. user@host:port, comma separated, same login. Type none to clear',
+        hint: 'user@host:port, comma separated. Each hop uses the same login',
         masked: false,
         fallback: draft.jump,
       };
@@ -242,8 +265,12 @@ export function stepValue(step: Step, draft: Draft): string {
     case 'passphrase':
       if (draft.passphrase) return '••••';
       return draft.keepPassphrase ? '(saved)' : '(none)';
+    case 'startPathChoice':
+      return draft.startMode === 'custom' ? 'Custom path' : 'Home directory';
     case 'startPath':
       return draft.startPath || '(home)';
+    case 'jumpChoice':
+      return draft.jumpMode === 'custom' ? 'Jump host' : 'No jump host';
     case 'jump':
       return draft.jump || '(none)';
     default: {
@@ -251,6 +278,69 @@ export function stepValue(step: Step, draft: Draft): string {
       return unreachable;
     }
   }
+}
+
+export interface ChoiceOption {
+  id: string;
+  label: string;
+  hint: string;
+}
+
+/** Steps answered with Up, Down, and Enter. Everything else is typed. */
+export function choiceOptions(step: Step): ChoiceOption[] | null {
+  if (step === 'auth') {
+    return [
+      { id: 'password', label: 'Password', hint: 'Stored in the editor secret storage' },
+      { id: 'privateKey', label: 'Private key', hint: 'Sign in with a key file' },
+      { id: 'agent', label: 'SSH agent', hint: 'Use a key already loaded in your agent' },
+    ];
+  }
+  if (step === 'startPathChoice') {
+    return [
+      { id: 'home', label: 'Home directory', hint: 'Open your home directory on the server' },
+      { id: 'custom', label: 'Custom path', hint: 'Type an absolute remote path' },
+    ];
+  }
+  if (step === 'jumpChoice') {
+    return [
+      { id: 'none', label: 'No jump host', hint: 'Connect directly' },
+      { id: 'custom', label: 'Use a jump host', hint: 'Hop through user@host:port' },
+    ];
+  }
+  return null;
+}
+
+export function choiceIndex(step: Step, draft: Draft): number {
+  const options = choiceOptions(step);
+  if (!options) return 0;
+  const id = step === 'auth'
+    ? draft.auth
+    : step === 'startPathChoice'
+      ? draft.startMode
+      : draft.jumpMode;
+  const index = options.findIndex((option) => option.id === id);
+  return index >= 0 ? index : 0;
+}
+
+export function applyChoice(step: Step, optionId: string, draft: Draft): { draft: Draft; error?: string } {
+  const options = choiceOptions(step);
+  if (!options) return { draft, error: 'This step needs typed text' };
+  const resolved = step === 'auth' ? parseAuth(optionId) : undefined;
+  const option = options.find((item) => item.id === (resolved ?? optionId) || item.label.toLowerCase() === optionId.trim().toLowerCase());
+  if (!option) return { draft, error: 'Choose one of the options' };
+  const next: Draft = { ...draft, originalJumps: draft.originalJumps.map((item) => ({ ...item })) };
+  if (step === 'auth') {
+    next.auth = option.id as AuthMethod;
+    return { draft: next };
+  }
+  if (step === 'startPathChoice') {
+    next.startMode = option.id === 'custom' ? 'custom' : 'home';
+    if (next.startMode === 'home') next.startPath = '';
+    return { draft: next };
+  }
+  next.jumpMode = option.id === 'custom' ? 'custom' : 'none';
+  if (next.jumpMode === 'none') next.jump = '';
+  return { draft: next };
 }
 
 function parseAuth(input: string): AuthMethod | undefined {
@@ -268,6 +358,7 @@ export interface ApplyContext {
 }
 
 export function applyStep(step: Step, typed: string, draft: Draft, ctx: ApplyContext): { draft: Draft; error?: string } {
+  if (choiceOptions(step)) return applyChoice(step, typed, draft);
   const next: Draft = { ...draft, originalJumps: draft.originalJumps.map((item) => ({ ...item })) };
   const fallback = promptFor(step, draft).fallback;
   const value = typed.length > 0 ? typed : fallback;
@@ -276,6 +367,7 @@ export function applyStep(step: Step, typed: string, draft: Draft, ctx: ApplyCon
     const name = value.trim();
     if (!name) return { draft, error: 'Name is required' };
     if (name.length > 48) return { draft, error: 'Name must be 48 characters or fewer' };
+    if (isReservedCommand(name)) return { draft, error: 'That name is a system command. Pick another name' };
     if (ctx.takenNames.some((item) => item.toLowerCase() === name.toLowerCase())) {
       return { draft, error: 'A connection with that name already exists' };
     }

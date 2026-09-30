@@ -6,10 +6,10 @@ import { safeFileName, shortenPath } from '../text';
 import type { BrowseEntry, ConnectionRecord, Notice } from '../types';
 import type { AppHost, FileSession } from './host';
 import type { InputEvent } from './input';
-import { parseConnectionCommand } from './commands';
+import { defaultSlashPick, matchSlashCommands, parseConnectionCommand, type SlashTarget } from './commands';
 import { paint, render, type LineLink } from './render';
 import type { ConnectionItem, Screen } from './screen';
-import { applyStep, draftFromRecord, emptyDraft, nextStep, prevStep, toConnection } from './wizard';
+import { applyChoice, applyStep, choiceIndex, choiceOptions, draftFromRecord, emptyDraft, nextStep, prevStep, toConnection } from './wizard';
 
 function describe(record: ConnectionRecord): ConnectionItem {
   const auth = record.auth === 'privateKey' ? 'key' : record.auth;
@@ -169,7 +169,7 @@ export class EasySshApp {
     }
     if (this.screen.kind === 'connections') {
       if (this.screen.command) {
-        this.screen = { ...this.screen, command: '' };
+        this.screen = { ...this.screen, command: '', pick: 0 };
         this.draw();
         return;
       }
@@ -181,6 +181,13 @@ export class EasySshApp {
     const screen = this.screen;
     if (screen.kind !== 'connections') return;
     if (event.type === 'key' && (event.key === 'up' || event.key === 'down')) {
+      const matches = matchSlashCommands(screen.command, slashTargets(screen.items));
+      if (matches.length > 0) {
+        const pick = move(screen.pick, event.key === 'up' ? -1 : 1, matches.length);
+        this.screen = { ...screen, pick };
+        this.draw();
+        return;
+      }
       const selected = move(screen.selected, event.key === 'up' ? -1 : 1, screen.items.length);
       this.selectedId = screen.items[selected]?.id;
       this.screen = { ...screen, selected };
@@ -189,26 +196,24 @@ export class EasySshApp {
     }
     if (event.type === 'key' && event.key === 'escape') {
       if (!screen.command) return;
-      this.screen = { ...screen, command: '' };
+      this.screen = { ...screen, command: '', pick: 0 };
       this.draw();
       return;
     }
     if (event.type === 'key' && (event.key === 'backspace' || event.key === 'delete')) {
       if (!screen.command) return;
-      this.screen = { ...screen, command: [...screen.command].slice(0, -1).join(''), notice: undefined };
-      this.draw();
+      this.setCommand(screen, [...screen.command].slice(0, -1).join(''), undefined);
       return;
     }
     if (event.type === 'key' && event.key === 'ctrl-u') {
-      this.screen = { ...screen, command: '' };
+      this.screen = { ...screen, command: '', pick: 0 };
       this.draw();
       return;
     }
     if (event.type === 'text' || event.type === 'paste') {
       const extra = event.text.replace(/[\r\n]/g, '');
       if (!extra) return;
-      this.screen = { ...screen, command: screen.command + extra, notice: undefined };
-      this.draw();
+      this.setCommand(screen, screen.command + extra, undefined);
       return;
     }
     if (event.type === 'key' && event.key === 'enter') await this.runConnectionCommand();
@@ -217,7 +222,17 @@ export class EasySshApp {
   private async runConnectionCommand(): Promise<void> {
     const screen = this.screen;
     if (screen.kind !== 'connections') return;
-    const action = parseConnectionCommand(screen.command);
+    const matches = matchSlashCommands(screen.command, slashTargets(screen.items));
+    const chosen = matches.length > 0 ? matches[Math.max(0, Math.min(screen.pick, matches.length - 1))] : undefined;
+    if (chosen?.connectionId) {
+      this.screen = { ...screen, command: '', pick: 0 };
+      const record = this.records.get(chosen.connectionId);
+      if (record) await this.connect(record, false);
+      else this.showNotice('info', 'That connection is no longer available');
+      return;
+    }
+    const line = chosen ? `/${chosen.name}` : screen.command;
+    const action = parseConnectionCommand(line);
     if (action.type === 'unknown') {
       this.screen = {
         ...screen,
@@ -226,7 +241,7 @@ export class EasySshApp {
       this.draw();
       return;
     }
-    this.screen = { ...screen, command: '' };
+    this.screen = { ...screen, command: '', pick: 0 };
     switch (action.type) {
       case 'connect': {
         const record = this.currentRecord();
@@ -236,7 +251,7 @@ export class EasySshApp {
       }
       case 'new':
         this.editingId = undefined;
-        this.screen = { kind: 'wizard', title: 'new connection', draft: emptyDraft(), step: 'name', input: '' };
+        this.screen = { kind: 'wizard', title: 'new connection', draft: emptyDraft(), step: 'name', input: '', pick: 0 };
         this.draw();
         return;
       case 'edit': {
@@ -254,6 +269,7 @@ export class EasySshApp {
           draft: draftFromRecord(record, saved),
           step: 'name',
           input: '',
+          pick: 0,
         };
         this.draw();
         return;
@@ -279,7 +295,7 @@ export class EasySshApp {
         this.host.quit();
         return;
       case 'help':
-        this.showNotice('info', 'Commands: /new, /edit, /delete, /import, /folder, /quit');
+        this.showNotice('info', 'Commands: /new, /edit, /delete, /import, /folder, /quit. A connection name connects directly.');
         return;
       default: {
         const unreachable: never = action;
@@ -332,14 +348,24 @@ export class EasySshApp {
 
   private async onWizard(event: InputEvent): Promise<void> {
     if (this.screen.kind !== 'wizard') return;
+    const options = choiceOptions(this.screen.step);
     if (event.type === 'key' && event.key === 'escape') {
       const back = prevStep(this.screen.step, this.screen.draft);
       if (back === 'start') {
         await this.showConnections();
         return;
       }
-      this.screen = { ...this.screen, step: back, input: '', error: undefined };
+      this.screen = { ...this.screen, step: back, input: '', pick: choiceIndex(back, this.screen.draft), error: undefined };
       this.draw();
+      return;
+    }
+    if (options) {
+      if (event.type === 'key' && (event.key === 'up' || event.key === 'down')) {
+        const pick = move(this.screen.pick, event.key === 'up' ? -1 : 1, options.length);
+        this.screen = { ...this.screen, pick };
+        this.draw();
+      }
+      if (event.type === 'key' && event.key === 'enter') await this.advanceWizard(options[Math.max(0, Math.min(this.screen.pick, options.length - 1))].id);
       return;
     }
     if (event.type === 'key' && (event.key === 'backspace' || event.key === 'delete')) {
@@ -359,12 +385,19 @@ export class EasySshApp {
       return;
     }
     if (event.type !== 'key' || event.key !== 'enter') return;
+    await this.advanceWizard(this.screen.input);
+  }
+
+  private async advanceWizard(typed: string): Promise<void> {
+    if (this.screen.kind !== 'wizard') return;
     const taken = [...this.records.values()].filter((record) => record.id !== this.editingId).map((record) => record.name);
-    const applied = applyStep(this.screen.step, this.screen.input, this.screen.draft, {
-      takenNames: taken,
-      keyExists: (file) => this.host.keyExists(file),
-      home: this.host.home(),
-    });
+    const applied = choiceOptions(this.screen.step)
+      ? applyChoice(this.screen.step, typed, this.screen.draft)
+      : applyStep(this.screen.step, typed, this.screen.draft, {
+          takenNames: taken,
+          keyExists: (file) => this.host.keyExists(file),
+          home: this.host.home(),
+        });
     if (applied.error) {
       this.screen = { ...this.screen, draft: applied.draft, error: applied.error };
       this.draw();
@@ -372,7 +405,14 @@ export class EasySshApp {
     }
     const following = nextStep(this.screen.step, applied.draft);
     if (following !== 'done') {
-      this.screen = { ...this.screen, draft: applied.draft, step: following, input: '', error: undefined };
+      this.screen = {
+        ...this.screen,
+        draft: applied.draft,
+        step: following,
+        input: '',
+        pick: choiceIndex(following, applied.draft),
+        error: undefined,
+      };
       this.draw();
       return;
     }
@@ -457,6 +497,12 @@ export class EasySshApp {
     return true;
   }
 
+  private setCommand(screen: Extract<Screen, { kind: 'connections' }>, command: string, notice: Notice | undefined): void {
+    const matches = matchSlashCommands(command, slashTargets(screen.items));
+    this.screen = { ...screen, command, pick: defaultSlashPick(matches, command), notice };
+    this.draw();
+  }
+
   private currentRecord(): ConnectionRecord | undefined {
     if (this.screen.kind !== 'connections') return undefined;
     const item = this.screen.items[this.screen.selected];
@@ -469,7 +515,7 @@ export class EasySshApp {
     const items = records.map(describe);
     let selected = items.findIndex((item) => item.id === this.selectedId);
     if (selected < 0) selected = 0;
-    this.screen = { kind: 'connections', items, selected, notice, command: '' };
+    this.screen = { kind: 'connections', items, selected, notice, command: '', pick: 0 };
     this.host.setStatus(undefined);
     this.draw();
   }
@@ -739,6 +785,14 @@ export class EasySshApp {
     this.links = frame.links;
     this.emit(paint(frame));
   }
+}
+
+function slashTargets(items: ConnectionItem[]): SlashTarget[] {
+  return items.map((item) => ({
+    id: item.id,
+    name: item.name,
+    description: `${item.userHost} · ${item.detail}`,
+  }));
 }
 
 function move(selected: number, delta: number, count: number): number {

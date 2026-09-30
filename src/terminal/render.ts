@@ -1,7 +1,8 @@
 import { formatFingerprint, formatSize, formatTime, padLeft, shortenPath, truncate, displayWidth } from '../text';
 import type { BrowseEntry, Notice, TransferState } from '../types';
+import { assignConnectionTokens, matchSlashCommands, type SlashCommand, type SlashTarget } from './commands';
 import type { Screen } from './screen';
-import { promptFor, stepValue, stepsBefore } from './wizard';
+import { choiceOptions, promptFor, stepValue, stepsBefore } from './wizard';
 
 export interface LineLink {
   start: number;
@@ -95,43 +96,10 @@ function blank(width: number): PaintedLine {
   return paintPieces([{ text: '' }], width);
 }
 
-function hints(items: string[], width: number): PaintedLine {
-  const kept: string[] = [];
-  for (const item of items) {
-    const next = kept.length === 0 ? item : `${kept.join('   ')}   ${item}`;
-    if (displayWidth(next) > width) break;
-    kept.push(item);
-  }
-  return paintPieces([{ text: kept.join('   '), tone: 'muted' }], width);
-}
-
 function noticeLine(notice: Notice | undefined, width: number): PaintedLine | undefined {
   if (!notice) return undefined;
   const tone = notice.tone === 'error' ? 'red' : notice.tone === 'ok' ? 'green' : 'blue';
   return paintPieces([{ text: truncate(notice.text, width), tone }], width);
-}
-
-function header(meta: string, width: number): PaintedLine {
-  const title = 'Easy SSH';
-  if (!meta || displayWidth(title) + 2 + displayWidth(meta) > width) {
-    return paintPieces([{ text: truncate(title, width), tone: 'primary', bold: true }], width);
-  }
-  const gap = width - displayWidth(title) - displayWidth(meta);
-  return paintPieces(
-    [
-      { text: title, tone: 'primary', bold: true },
-      { text: ' '.repeat(gap) },
-      { text: meta, tone: 'muted' },
-    ],
-    width,
-  );
-}
-
-function downloadMeta(folder: string, home: string, cols: number): string {
-  const prefix = 'download → ';
-  const budget = cols - displayWidth('Easy SSH') - 2 - displayWidth(prefix);
-  if (budget < 8) return '';
-  return prefix + shortenPath(folder, home, budget);
 }
 
 function fit(lines: PaintedLine[], rows: number, width: number): PaintedLine[] {
@@ -185,171 +153,329 @@ export function render(screen: Screen, view: RenderView): Frame {
   }
 
   if (screen.kind === 'connections') return renderHome(screen, view);
-
-  const meta = downloadMeta(view.downloadFolder, view.home, cols);
-  const top = header(meta, cols);
-  let body: PaintedLine[] = [];
-  let cursor: { row: number; col: number } | undefined;
-  let footerNote: PaintedLine | undefined;
-  let footer = hints(['q quit'], cols);
-
-  if (screen.kind === 'loading') {
-    body = [blank(cols), paintPieces([{ text: 'Loading connections…', tone: 'muted' }], cols)];
-  } else if (screen.kind === 'connecting') {
-    body = [
-      blank(cols),
-      paintPieces([{ text: `Connecting to ${screen.label}`, tone: 'primary' }], cols),
-    ];
-    footer = hints(['ctrl+c cancel'], cols);
-  } else if (screen.kind === 'confirm' || screen.kind === 'trust') {
-    const title = screen.kind === 'confirm' ? `Delete ${screen.item.name}?` : 'Host key changed';
-    const choices = screen.kind === 'confirm'
-      ? ['No', 'Yes, delete']
-      : ['No, disconnect', 'Yes, trust this key'];
-    body = [blank(cols), paintPieces([{ text: title, tone: 'primary', bold: true }], cols), blank(cols)];
-    if (screen.kind === 'trust') {
-      body.push(paintPieces([{ text: screen.hostLabel, tone: 'text' }], cols));
-      body.push(paintPieces([{ text: formatFingerprint(screen.fingerprint), tone: 'blue' }], cols));
-      body.push(blank(cols));
-      body.push(paintPieces([{ text: 'This does not match the key saved for this server.', tone: 'muted' }], cols));
-      body.push(blank(cols));
-    }
-    choices.forEach((choice, index) => {
-      const selected = index === screen.choice;
-      body.push(
-        paintPieces(
-          [
-            { text: selected ? '❯ ' : '  ', tone: 'primary', bold: selected },
-            { text: choice, tone: selected ? 'primary' : 'text' },
-          ],
-          cols,
-          selected,
-        ),
-      );
-    });
-    footer = hints(['enter confirm', 'y yes', 'n no', 'esc back'], cols);
-  } else if (screen.kind === 'wizard') {
-    footerNote = screen.error
-      ? paintPieces([{ text: truncate(screen.error, cols), tone: 'red' }], cols)
-      : noticeLine(screen.notice, cols);
-    footer = hints(['enter confirm', 'esc back', 'ctrl+c cancel'], cols);
-    const prompt = promptFor(screen.step, screen.draft);
-    body = [blank(cols), paintPieces([{ text: screen.title, tone: 'muted' }], cols), blank(cols)];
-    for (const step of stepsBefore(screen.step, screen.draft)) {
-      const value = stepValue(step, screen.draft);
-      body.push(
-        paintPieces(
-          [
-            { text: `  ${stepValueLabel(step)}`, tone: 'muted' },
-            { text: '  ' },
-            { text: truncate(value, Math.max(8, cols - 20)), tone: 'text' },
-          ],
-          cols,
-        ),
-      );
-    }
-    if (stepsBefore(screen.step, screen.draft).length > 0) body.push(blank(cols));
-    const bracket = !prompt.masked && prompt.fallback ? ` [${prompt.fallback}]` : '';
-    body.push(paintPieces([{ text: `${prompt.label}${bracket}`, tone: 'primary' }], cols));
-    body.push(paintPieces([{ text: truncate(prompt.hint, cols), tone: 'muted' }], cols));
-    const shownInput = prompt.masked ? '•'.repeat(screen.input.length) : screen.input;
-    const prefix = '❯ ';
-    const room = Math.max(1, cols - displayWidth(prefix));
-    const tail = tailText(shownInput, room);
-    const inputRow = body.length;
-    body.push(
-      paintPieces(
-        [
-          { text: prefix, tone: 'primary', bold: true },
-          { text: tail, tone: 'text' },
-        ],
-        cols,
-      ),
-    );
-    cursor = { row: 0, col: displayWidth(prefix + tail) + 1 };
-    cursor.row = inputRow;
-  } else {
-    const browse = screen;
-    footerNote = browse.transfer ? progressLine(browse.transfer, cols) : noticeLine(browse.notice, cols);
-    footer = browse.transfer
-      ? hints(['ctrl+c cancel transfer'], cols)
-      : browse.goto !== null
-        ? hints(['enter go', 'esc cancel'], cols)
-        : hints([
-            view.clickHint,
-            'drop files to upload',
-            'enter open',
-            'u upload',
-            'backspace up',
-            'r refresh',
-            'g path',
-            'q disconnect',
-          ], cols);
-    body = [
-      paintPieces(
-        [
-          { text: truncate(browse.title, Math.max(4, cols - displayWidth(browse.userHost) - 2)), tone: 'primary', bold: true },
-          { text: '  ' },
-          { text: truncate(browse.userHost, Math.max(8, cols / 2)), tone: 'muted' },
-        ],
-        cols,
-      ),
-      paintPieces([{ text: truncate(browse.cwd, cols), tone: 'blue' }], cols),
-      blank(cols),
-    ];
-    const listHeight = Math.max(1, rows - 1 - body.length - 1 - (footerNote ? 1 : 0));
-    const visible = windowed(browse.entries, browse.selected, listHeight);
-    const first = visible[0];
-    const offset = first ? browse.entries.indexOf(first) : 0;
-    if (browse.entries.length === 0) {
-      body.push(paintPieces([{ text: '  (empty)', tone: 'muted' }], cols));
-    }
-    visible.forEach((entry, index) => {
-      const selected = offset + index === browse.selected;
-      const painted = fileRow(entry, selected, cols);
-      body.push(painted.line);
-      if (painted.link) links.set(painted.line.plain.trimEnd(), painted.link);
-    });
-    if (browse.goto !== null) {
-      const prefix = 'path ❯ ';
-      const room = Math.max(1, cols - displayWidth(prefix));
-      const tail = tailText(browse.goto, room);
-      footer = paintPieces(
-        [
-          { text: prefix, tone: 'primary', bold: true },
-          { text: tail, tone: 'text' },
-        ],
-        cols,
-      );
-      cursor = { row: rows - 1, col: displayWidth(prefix + tail) + 1 };
-    }
-  }
-
-  const footerRows = [footerNote, footer].filter((line): line is PaintedLine => Boolean(line));
-  const available = rows - 1 - footerRows.length;
-  const keepTail = screen.kind === 'wizard' || screen.kind === 'trust' || screen.kind === 'confirm';
-  const trimmedBody = body.length <= available
-    ? body
-    : keepTail
-      ? body.slice(body.length - available)
-      : body.slice(0, available);
-  const lines = fit(
-    [top, ...trimmedBody, ...Array.from({ length: Math.max(0, available - trimmedBody.length) }, () => blank(cols)), ...footerRows],
-    rows,
-    cols,
-  );
-  if (screen.kind === 'wizard') {
-    const inputIndex = trimmedBody.findIndex((line) => line.plain.trimEnd().startsWith('❯ '));
-    cursor = inputIndex >= 0 && cursor ? { row: inputIndex + 1, col: cursor.col } : undefined;
-  }
-  return { lines, cursor, links };
+  return renderPanel(screen, view);
 }
 
 function stepValueLabel(step: string): string {
   if (step === 'keyPath') return 'private key';
-  if (step === 'startPath') return 'remote path';
-  if (step === 'jump') return 'jump host';
+  if (step === 'startPath' || step === 'startPathChoice') return 'remote path';
+  if (step === 'jump' || step === 'jumpChoice') return 'jump host';
   return step;
+}
+
+interface RowLink {
+  needle: string;
+  remotePath: string;
+  kind: 'file' | 'dir';
+  tooltip: string;
+}
+
+interface PanelInput {
+  text: string;
+  editable: boolean;
+  meta: string;
+}
+
+function renderPanel(screen: Exclude<Screen, { kind: 'connections' }>, view: RenderView): Frame {
+  const links = new Map<string, LineLink>();
+  const cardWidth = Math.min(72, Math.max(20, view.cols - 8));
+  const innerWidth = cardWidth - 2;
+  const contentWidth = Math.max(8, innerWidth - 4);
+  const budget = panelBudget(view.rows);
+  let rowLinks: (RowLink | undefined)[] | undefined;
+  let anchor: 'start' | 'end' = 'start';
+  let content: PaintedLine[];
+  let input: PanelInput;
+
+  if (screen.kind === 'loading') {
+    content = titled('Easy SSH', 'Loading connections…', contentWidth);
+    input = { text: '', editable: false, meta: '' };
+  } else if (screen.kind === 'connecting') {
+    content = titled('Easy SSH', `Connecting to ${screen.label}`, contentWidth);
+    input = { text: 'ctrl+c cancel', editable: false, meta: '' };
+  } else if (screen.kind === 'confirm') {
+    content = choiceCard(`Delete ${screen.item.name}?`, 'This removes the saved connection.', ['No', 'Yes, delete'], screen.choice, contentWidth, screen.notice);
+    input = { text: 'Enter to confirm', editable: false, meta: '' };
+  } else if (screen.kind === 'trust') {
+    content = [
+      blank(contentWidth),
+      paintPieces([{ text: 'Host key changed', bold: true }], contentWidth),
+      paintPieces([{ text: truncate(screen.hostLabel, contentWidth), tone: 'muted' }], contentWidth),
+      paintPieces([{ text: truncate(formatFingerprint(screen.fingerprint), contentWidth), tone: 'blue' }], contentWidth),
+      blank(contentWidth),
+      paintPieces([{ text: truncate('This does not match the key saved for this server.', contentWidth), tone: 'muted' }], contentWidth),
+      blank(contentWidth),
+      ...choiceRows(['No, disconnect', 'Yes, trust this key'], screen.choice, contentWidth),
+      blank(contentWidth),
+    ];
+    input = { text: 'Enter to confirm', editable: false, meta: '' };
+  } else if (screen.kind === 'wizard') {
+    content = wizardCard(screen, contentWidth, budget);
+    const prompt = promptFor(screen.step, screen.draft);
+    if (choiceOptions(screen.step)) input = { text: 'Enter to confirm', editable: false, meta: '' };
+    else {
+      const shown = prompt.masked ? '•'.repeat([...screen.input].length) : screen.input;
+      const meta = !shown && !prompt.masked && prompt.fallback ? `[${prompt.fallback}]` : '';
+      input = { text: shown, editable: true, meta };
+    }
+    anchor = 'end';
+  } else {
+    const built = browseCard(screen, view, contentWidth, budget);
+    content = built.lines;
+    rowLinks = built.rowLinks;
+    if (screen.transfer) input = { text: 'ctrl+c cancel', editable: false, meta: '' };
+    else if (screen.goto !== null) input = { text: screen.goto, editable: true, meta: shortenPath(screen.cwd, view.home, 24) };
+    else input = { text: 'g path', editable: false, meta: shortenPath(screen.cwd, view.home, 40) };
+  }
+
+  return placePanel(content, rowLinks, view, input, anchor, links);
+}
+
+function panelBudget(rows: number): number {
+  const top = rows >= 30 ? 2 : 1;
+  return Math.max(4, rows - top - 1 - 3 - 2);
+}
+
+function titled(title: string, subtitle: string, width: number): PaintedLine[] {
+  return [
+    blank(width),
+    paintPieces([{ text: title, bold: true }, { text: `  ${VERSION}`, tone: 'muted' }], width),
+    blank(width),
+    paintPieces([{ text: truncate(subtitle, width), tone: 'primary' }], width),
+    blank(width),
+  ];
+}
+
+function choiceCard(title: string, hint: string, labels: string[], pick: number, width: number, notice?: Notice): PaintedLine[] {
+  const lines: PaintedLine[] = [
+    blank(width),
+    paintPieces([{ text: truncate(title, width), bold: true }], width),
+    paintPieces([{ text: truncate(hint, width), tone: 'muted' }], width),
+  ];
+  const note = noticeLine(notice, width);
+  if (note) lines.push(note);
+  lines.push(blank(width), ...choiceRows(labels, pick, width), blank(width));
+  return lines;
+}
+
+function choiceRows(labels: string[], pick: number, width: number, hints: string[] = []): PaintedLine[] {
+  const selected = Math.max(0, Math.min(pick, Math.max(0, labels.length - 1)));
+  const nameWidth = Math.max(1, ...labels.map((label) => displayWidth(label)));
+  return labels.map((label, index) => choiceRow(label, hints[index] ?? '', index === selected, nameWidth, width));
+}
+
+function choiceRow(label: string, hint: string, selected: boolean, nameWidth: number, width: number): PaintedLine {
+  const marker = selected ? '> ' : '  ';
+  const padded = label + ' '.repeat(Math.max(0, nameWidth - displayWidth(label)));
+  const room = Math.max(0, width - displayWidth(marker) - displayWidth(padded) - 2);
+  const shown = room > 0 && hint ? truncate(hint, room) : '';
+  const pieces: Piece[] = [
+    { text: marker, tone: selected ? 'primary' : 'text', bold: selected },
+    { text: padded, tone: 'text', bold: selected },
+  ];
+  if (shown) pieces.push({ text: '  ' }, { text: shown, tone: 'muted' });
+  return paintPieces(pieces, width, selected);
+}
+
+function wizardCard(screen: Extract<Screen, { kind: 'wizard' }>, width: number, budget: number): PaintedLine[] {
+  const prompt = promptFor(screen.step, screen.draft);
+  const options = choiceOptions(screen.step);
+  const title = screen.title.charAt(0).toUpperCase() + screen.title.slice(1);
+  const lines: PaintedLine[] = [
+    blank(width),
+    paintPieces([{ text: truncate(title, width), bold: true }], width),
+    paintPieces([{ text: truncate(prompt.hint, width), tone: 'muted' }], width),
+  ];
+  if (screen.error) lines.push(paintPieces([{ text: truncate(screen.error, width), tone: 'red' }], width));
+  else {
+    const note = noticeLine(screen.notice, width);
+    if (note) lines.push(note);
+  }
+  const done = stepsBefore(screen.step, screen.draft);
+  if (done.length > 0) {
+    lines.push(blank(width));
+    for (const step of done) {
+      lines.push(paintPieces(splitLine(stepValueLabel(step), '', stepValue(step, screen.draft), width, false), width));
+    }
+  }
+  lines.push(blank(width));
+  if (options) lines.push(...choiceRows(options.map((option) => option.label), screen.pick, width, options.map((option) => option.hint)));
+  else {
+    const bracket = !prompt.masked && prompt.fallback ? `  [${prompt.fallback}]` : '';
+    lines.push(paintPieces([
+      { text: prompt.label, tone: 'primary', bold: true },
+      { text: truncate(bracket, Math.max(0, width - displayWidth(prompt.label))), tone: 'muted' },
+    ], width));
+  }
+  lines.push(blank(width));
+  if (lines.length > budget) return lines.slice(lines.length - budget);
+  return lines;
+}
+
+function browseCard(
+  screen: Extract<Screen, { kind: 'browse' }>,
+  view: RenderView,
+  width: number,
+  budget: number,
+): { lines: PaintedLine[]; rowLinks: (RowLink | undefined)[] } {
+  const lines: PaintedLine[] = [
+    blank(width),
+    paintPieces([{ text: truncate(screen.title, width), bold: true }], width),
+    paintPieces([{ text: truncate(screen.userHost, width), tone: 'muted' }], width),
+    paintPieces([{ text: truncate(screen.cwd, width), tone: 'blue' }], width),
+    paintPieces([{ text: truncate(`${view.clickHint}   drop files to upload`, width), tone: 'muted' }], width),
+  ];
+  if (screen.transfer) lines.push(progressLine(screen.transfer, width));
+  else {
+    const note = noticeLine(screen.notice, width);
+    if (note) lines.push(note);
+  }
+  lines.push(blank(width));
+  const listHeight = Math.max(1, budget - lines.length - 1);
+  const visible = windowed(screen.entries, screen.selected, listHeight);
+  const offset = visible[0] ? screen.entries.indexOf(visible[0]) : 0;
+  const rowLinks: (RowLink | undefined)[] = lines.map(() => undefined);
+  if (screen.entries.length === 0) {
+    lines.push(paintPieces([{ text: '(empty)', tone: 'muted' }], width));
+    rowLinks.push(undefined);
+  }
+  visible.forEach((entry, index) => {
+    const selected = offset + index === screen.selected;
+    const painted = fileRow(entry, selected, width);
+    lines.push(painted.line);
+    rowLinks.push(painted.link ? {
+      needle: painted.shown,
+      remotePath: painted.link.remotePath,
+      kind: painted.link.kind,
+      tooltip: painted.link.tooltip,
+    } : undefined);
+  });
+  lines.push(blank(width));
+  rowLinks.push(undefined);
+  return { lines, rowLinks };
+}
+
+function placePanel(
+  content: PaintedLine[],
+  rowLinks: (RowLink | undefined)[] | undefined,
+  view: RenderView,
+  input: PanelInput,
+  anchor: 'start' | 'end',
+  links: Map<string, LineLink>,
+): Frame {
+  const { cols, rows } = view;
+  const cardWidth = Math.min(72, Math.max(20, cols - 8));
+  const cardLeft = Math.max(0, Math.floor((cols - cardWidth) / 2));
+  const innerWidth = cardWidth - 2;
+  const promptWidth = Math.min(cols - 2, Math.max(cardWidth, Math.min(cols - 4, cardWidth + 8)));
+  const promptLeft = Math.max(0, Math.floor((cols - promptWidth) / 2));
+  const promptBlock = 3;
+  const top = rows >= 30 ? 2 : 1;
+  const gap = 1;
+  const maxInner = Math.max(1, rows - top - gap - promptBlock - 2);
+  let body = content;
+  let linksForRows = rowLinks ?? content.map(() => undefined);
+  if (body.length > maxInner) {
+    body = anchor === 'end' ? body.slice(body.length - maxInner) : body.slice(0, maxInner);
+    linksForRows = anchor === 'end' ? linksForRows.slice(linksForRows.length - maxInner) : linksForRows.slice(0, maxInner);
+  }
+  const card = frameCardLines(body, linksForRows, cardLeft, innerWidth, cols, links);
+  const prompt = frameInput(input.text, input.editable, input.meta, promptLeft, promptWidth - 2, cols);
+  const lines = Array.from({ length: rows }, () => blank(cols));
+  const room = Math.max(0, rows - promptBlock - gap);
+  const cardTop = Math.min(top, Math.max(0, room - card.length));
+  card.forEach((line, index) => {
+    const row = cardTop + index;
+    if (row >= 0 && row < room) lines[row] = line;
+  });
+  const promptTop = rows - promptBlock;
+  prompt.lines.forEach((line, index) => {
+    if (promptTop + index < rows) lines[promptTop + index] = line;
+  });
+  const cursor = input.editable && prompt.cursorCol !== undefined ? { row: promptTop + 1, col: prompt.cursorCol } : undefined;
+  return { lines, cursor, links };
+}
+
+function frameCardLines(
+  content: PaintedLine[],
+  rowLinks: (RowLink | undefined)[],
+  left: number,
+  innerWidth: number,
+  cols: number,
+  links: Map<string, LineLink>,
+): PaintedLine[] {
+  const contentWidth = Math.max(1, innerWidth - 4);
+  const lines = [rule(left, innerWidth + 2, cols, true)];
+  content.forEach((row, index) => {
+    const fitted = fitWidth(row, contentWidth);
+    const padded = joinPainted([
+      paintPieces([{ text: '  ' }], 2),
+      fitted,
+      paintPieces([{ text: '  ' }], 2),
+    ], innerWidth);
+    const full = boxSides(left, padded, cols);
+    lines.push(full);
+    const link = rowLinks[index];
+    if (!link) return;
+    const at = full.plain.indexOf(link.needle);
+    if (at < 0) return;
+    links.set(full.plain.trimEnd(), {
+      start: at,
+      length: link.needle.length,
+      remotePath: link.remotePath,
+      kind: link.kind,
+      tooltip: link.tooltip,
+    });
+  });
+  lines.push(rule(left, innerWidth + 2, cols, false));
+  return lines;
+}
+
+function fitWidth(line: PaintedLine, width: number): PaintedLine {
+  const used = displayWidth(line.plain);
+  if (used === width) return line;
+  if (used > width) return paintPieces([{ text: truncate(line.plain.trimEnd(), width) }], width);
+  const gap = ' '.repeat(width - used);
+  const styled = line.styled.endsWith('\x1b[0m') ? `${line.styled.slice(0, -4)}${gap}\x1b[0m` : `${line.styled}${gap}`;
+  return { plain: line.plain + gap, styled };
+}
+
+function frameInput(
+  text: string,
+  editable: boolean,
+  meta: string,
+  left: number,
+  innerWidth: number,
+  cols: number,
+): { lines: PaintedLine[]; cursorCol?: number } {
+  const contentWidth = Math.max(4, innerWidth - 4);
+  const prefix = editable ? '> ' : '';
+  const metaText = meta && displayWidth(meta) + displayWidth(prefix) + 4 < contentWidth ? meta : '';
+  const room = Math.max(0, contentWidth - displayWidth(prefix) - (metaText ? displayWidth(metaText) + 2 : 0));
+  const tail = tailText(text, Math.max(room, editable ? 1 : 0));
+  const gap = Math.max(metaText ? 2 : 0, contentWidth - displayWidth(prefix + tail) - displayWidth(metaText));
+  const content = paintPieces([
+    { text: prefix, tone: editable ? 'primary' : 'muted', bold: editable },
+    { text: tail, tone: editable ? 'text' : 'muted' },
+    { text: ' '.repeat(Math.max(0, gap)) },
+    { text: metaText, tone: 'muted' },
+  ], contentWidth);
+  const padded = joinPainted([
+    paintPieces([{ text: '  ' }], 2),
+    content,
+    paintPieces([{ text: '  ' }], 2),
+  ], innerWidth);
+  const line = boxSides(left, padded, cols);
+  let cursorCol: number | undefined;
+  if (editable) {
+    const marker = prefix + tail;
+    const at = line.plain.indexOf(marker);
+    cursorCol = (at >= 0 ? at : 0) + displayWidth(marker) + 1;
+  }
+  return {
+    lines: [rule(left, innerWidth + 2, cols, true), line, rule(left, innerWidth + 2, cols, false)],
+    cursorCol,
+  };
 }
 
 function tailText(text: string, width: number): string {
@@ -366,8 +492,8 @@ function tailText(text: string, width: number): string {
   return out;
 }
 
-function fileRow(entry: BrowseEntry, selected: boolean, cols: number): { line: PaintedLine; link?: LineLink } {
-  const marker = selected ? '❯ ' : '  ';
+function fileRow(entry: BrowseEntry, selected: boolean, cols: number): { line: PaintedLine; shown: string; link?: LineLink } {
+  const marker = selected ? '> ' : '  ';
   const name = entryName(entry);
   const right = entry.name === '..' || !entry.mtime
     ? ''
@@ -387,9 +513,10 @@ function fileRow(entry: BrowseEntry, selected: boolean, cols: number): { line: P
     selected,
   );
   const kind = entry.kind === 'file' ? 'file' : entry.kind === 'dir' || entry.name === '..' ? 'dir' : entry.kind === 'link' ? 'file' : undefined;
-  if (!kind) return { line };
+  if (!kind) return { line, shown };
   return {
     line,
+    shown,
     link: {
       start: marker.length,
       length: shown.length,
@@ -420,6 +547,7 @@ function renderHome(screen: Extract<Screen, { kind: 'connections' }>, view: Rend
   const useLogo = contentWidth >= displayWidth(LOGO[0]) + 18;
   const textInset = useLogo ? displayWidth(LOGO[0]) + 2 : 0;
   const column = Math.max(8, contentWidth - textInset);
+  const tokens = assignConnectionTokens(screen.items.map((item) => ({ id: item.id, name: item.name, description: item.userHost })));
   let commands = contentWidth >= 40 ? [...HOME_COMMANDS] : HOME_COMMANDS.filter((item) => item.key !== '/import');
 
   const buildInner = (listLimit: number): Piece[][] => {
@@ -442,7 +570,7 @@ function renderHome(screen: Extract<Screen, { kind: 'connections' }>, view: Rend
     }
     const description = screen.items.length === 0
       ? 'Add a connection, or /import hosts from ~/.ssh/config.'
-      : 'Enter connects the selected host.';
+      : 'Type /name to connect. Enter uses the selected host.';
     lines.push(inset([{ text: truncate(description, column), tone: 'muted' }]));
     if (screen.notice) {
       const tone = screen.notice.tone === 'error' ? 'red' : screen.notice.tone === 'ok' ? 'green' : 'blue';
@@ -450,14 +578,17 @@ function renderHome(screen: Extract<Screen, { kind: 'connections' }>, view: Rend
     }
     lines.push([]);
     if (screen.items.length > 0) {
+      lines.push(inset([{ text: 'Connections', tone: 'muted' }]));
       const visible = windowed(screen.items, screen.selected, Math.max(1, listLimit));
       const offset = screen.items.indexOf(visible[0] ?? screen.items[0]);
       visible.forEach((item, index) => {
         const selected = offset + index === screen.selected;
-        lines.push(inset(splitLine(item.name, item.detail, item.userHost, column, selected)));
+        const token = tokens.get(item.id) ?? item.name;
+        lines.push(inset(splitLine(item.name, `${item.detail}  ${item.userHost}`, `/${token}`, column, selected)));
       });
       lines.push([]);
     }
+    lines.push(inset([{ text: 'Commands', tone: 'muted' }]));
     for (const command of commands) {
       lines.push(inset(splitLine(command.label, '', command.key, column, false)));
     }
@@ -494,6 +625,16 @@ function renderHome(screen: Extract<Screen, { kind: 'connections' }>, view: Rend
   prompt.lines.forEach((line, index) => {
     lines[promptTop + index] = line;
   });
+  const matches = matchSlashCommands(screen.command, slashTargetsFrom(screen.items));
+  if (matches.length > 0) {
+    const menuGap = 1;
+    const menu = frameMenu(matches, screen.pick, promptLeft, promptWidth - 2, cols, promptTop - menuGap);
+    const menuTop = promptTop - menuGap - menu.lines.length;
+    menu.lines.forEach((line, index) => {
+      const row = menuTop + index;
+      if (row >= 0 && row < promptTop) lines[row] = line;
+    });
+  }
   return { lines, cursor: { row: promptTop + 1, col: prompt.cursorCol }, links };
 
   function inset(pieces: Piece[]): Piece[] {
@@ -568,6 +709,88 @@ function framePrompt(
     lines: [rule(left, innerWidth + 2, cols, true), line, rule(left, innerWidth + 2, cols, false)],
     cursorCol,
   };
+}
+
+function slashTargetsFrom(items: { id: string; name: string; userHost: string; detail: string }[]): SlashTarget[] {
+  return items.map((item) => ({
+    id: item.id,
+    name: item.name,
+    description: `${item.userHost} · ${item.detail}`,
+  }));
+}
+
+interface MenuVisual {
+  header?: string;
+  command?: SlashCommand;
+  commandIndex?: number;
+}
+
+function frameMenu(
+  commands: SlashCommand[],
+  pick: number,
+  left: number,
+  innerWidth: number,
+  cols: number,
+  maxLines: number,
+): { lines: PaintedLine[] } {
+  if (maxLines < 3 || commands.length === 0) return { lines: [] };
+  const contentWidth = Math.max(4, innerWidth - 4);
+  const selected = Math.max(0, Math.min(pick, commands.length - 1));
+  const rows = menuVisuals(commands);
+  const rowBudget = Math.max(1, maxLines - 2);
+  let focus = rows.findIndex((row) => row.commandIndex === selected);
+  if (focus < 0) focus = 0;
+  let start = focus - Math.floor((rowBudget - 1) / 2);
+  if (start < 0) start = 0;
+  if (start > rows.length - rowBudget) start = Math.max(0, rows.length - rowBudget);
+  const visible = rows.slice(start, start + rowBudget);
+  const visibleCommands = visible.flatMap((row) => (row.command ? [row.command] : []));
+  const nameWidth = Math.max(1, ...visibleCommands.map((command) => displayWidth(`/${command.name}`)));
+  const lines = [rule(left, innerWidth + 2, cols, true)];
+  for (const row of visible) {
+    const active = row.commandIndex === selected;
+    const content = row.header
+      ? paintPieces([{ text: row.header, tone: 'muted' }], contentWidth)
+      : menuRow(row.command as SlashCommand, active, nameWidth, contentWidth);
+    const padded = joinPainted(
+      [
+        paintPieces([{ text: '  ' }], 2, active),
+        content,
+        paintPieces([{ text: '  ' }], 2, active),
+      ],
+      innerWidth,
+    );
+    lines.push(boxSides(left, padded, cols));
+  }
+  lines.push(rule(left, innerWidth + 2, cols, false));
+  return { lines };
+}
+
+function menuVisuals(commands: SlashCommand[]): MenuVisual[] {
+  const rows: MenuVisual[] = [];
+  let group: SlashCommand['group'] | '' = '';
+  commands.forEach((command, index) => {
+    if (command.group !== group) {
+      group = command.group;
+      rows.push({ header: group === 'connection' ? 'Connections' : 'Commands' });
+    }
+    rows.push({ command, commandIndex: index });
+  });
+  return rows;
+}
+
+function menuRow(command: SlashCommand, selected: boolean, nameWidth: number, width: number): PaintedLine {
+  const marker = selected ? '> ' : '  ';
+  const name = `/${command.name}`;
+  const paddedName = name + ' '.repeat(Math.max(0, nameWidth - displayWidth(name)));
+  const descRoom = Math.max(0, width - displayWidth(marker) - displayWidth(paddedName) - 2);
+  const desc = descRoom > 0 ? truncate(command.description, descRoom) : '';
+  const pieces: Piece[] = [
+    { text: marker, tone: selected ? 'primary' : 'text', bold: selected },
+    { text: paddedName, tone: 'text', bold: selected },
+  ];
+  if (desc) pieces.push({ text: '  ' }, { text: desc, tone: 'muted' });
+  return paintPieces(pieces, width, selected);
 }
 
 function folderLabel(folder: string, home: string, budget: number): string {
