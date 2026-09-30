@@ -6,6 +6,7 @@ import { safeFileName, shortenPath } from '../text';
 import type { BrowseEntry, ConnectionRecord, Notice } from '../types';
 import type { AppHost, FileSession } from './host';
 import type { InputEvent } from './input';
+import { parseConnectionCommand } from './commands';
 import { paint, render, type LineLink } from './render';
 import type { ConnectionItem, Screen } from './screen';
 import { applyStep, draftFromRecord, emptyDraft, nextStep, prevStep, toConnection } from './wizard';
@@ -166,7 +167,14 @@ export class EasySshApp {
       await this.disconnect();
       return;
     }
-    if (this.screen.kind === 'connections') this.host.quit();
+    if (this.screen.kind === 'connections') {
+      if (this.screen.command) {
+        this.screen = { ...this.screen, command: '' };
+        this.draw();
+        return;
+      }
+      this.host.quit();
+    }
   }
 
   private async onConnections(event: InputEvent): Promise<void> {
@@ -179,44 +187,105 @@ export class EasySshApp {
       this.draw();
       return;
     }
-    if (event.type === 'key' && event.key === 'enter') {
-      const record = this.currentRecord();
-      if (record) await this.connect(record, false);
-      return;
-    }
-    if (event.type !== 'text' || event.text.length !== 1) return;
-    const key = event.text.toLowerCase();
-    if (key === 'n') {
-      this.editingId = undefined;
-      this.screen = { kind: 'wizard', title: 'new connection', draft: emptyDraft(), step: 'name', input: '' };
+    if (event.type === 'key' && event.key === 'escape') {
+      if (!screen.command) return;
+      this.screen = { ...screen, command: '' };
       this.draw();
       return;
     }
-    if (key === 'e') {
-      const record = this.currentRecord();
-      if (!record) return;
-      const saved = await this.host.secretFlags(record.id);
-      this.editingId = record.id;
+    if (event.type === 'key' && (event.key === 'backspace' || event.key === 'delete')) {
+      if (!screen.command) return;
+      this.screen = { ...screen, command: [...screen.command].slice(0, -1).join(''), notice: undefined };
+      this.draw();
+      return;
+    }
+    if (event.type === 'key' && event.key === 'ctrl-u') {
+      this.screen = { ...screen, command: '' };
+      this.draw();
+      return;
+    }
+    if (event.type === 'text' || event.type === 'paste') {
+      const extra = event.text.replace(/[\r\n]/g, '');
+      if (!extra) return;
+      this.screen = { ...screen, command: screen.command + extra, notice: undefined };
+      this.draw();
+      return;
+    }
+    if (event.type === 'key' && event.key === 'enter') await this.runConnectionCommand();
+  }
+
+  private async runConnectionCommand(): Promise<void> {
+    const screen = this.screen;
+    if (screen.kind !== 'connections') return;
+    const action = parseConnectionCommand(screen.command);
+    if (action.type === 'unknown') {
       this.screen = {
-        kind: 'wizard',
-        title: `edit ${record.name}`,
-        draft: draftFromRecord(record, saved),
-        step: 'name',
-        input: '',
+        ...screen,
+        notice: { tone: 'error', text: 'Unknown command. Try /new, /edit, /delete, or /help' },
       };
       this.draw();
       return;
     }
-    if (key === 'd') {
-      const item = screen.items[screen.selected];
-      if (!item) return;
-      this.screen = { kind: 'confirm', item, choice: 0 };
-      this.draw();
-      return;
+    this.screen = { ...screen, command: '' };
+    switch (action.type) {
+      case 'connect': {
+        const record = this.currentRecord();
+        if (record) await this.connect(record, false);
+        else this.showNotice('info', 'Type /new to add a connection');
+        return;
+      }
+      case 'new':
+        this.editingId = undefined;
+        this.screen = { kind: 'wizard', title: 'new connection', draft: emptyDraft(), step: 'name', input: '' };
+        this.draw();
+        return;
+      case 'edit': {
+        const record = this.currentRecord();
+        if (!record) {
+          this.showNotice('info', screen.items.length === 0 ? 'Type /new to add a connection' : 'Select a connection, then type /edit');
+          return;
+        }
+        const saved = await this.host.secretFlags(record.id);
+        if (this.closed || this.screen.kind !== 'connections') return;
+        this.editingId = record.id;
+        this.screen = {
+          kind: 'wizard',
+          title: `edit ${record.name}`,
+          draft: draftFromRecord(record, saved),
+          step: 'name',
+          input: '',
+        };
+        this.draw();
+        return;
+      }
+      case 'delete': {
+        if (this.screen.kind !== 'connections') return;
+        const item = this.screen.items[this.screen.selected];
+        if (!item) {
+          this.showNotice('info', 'Type /new to add a connection');
+          return;
+        }
+        this.screen = { kind: 'confirm', item, choice: 0 };
+        this.draw();
+        return;
+      }
+      case 'import':
+        await this.importConfig();
+        return;
+      case 'folder':
+        await this.pickFolder();
+        return;
+      case 'quit':
+        this.host.quit();
+        return;
+      case 'help':
+        this.showNotice('info', 'Commands: /new, /edit, /delete, /import, /folder, /quit');
+        return;
+      default: {
+        const unreachable: never = action;
+        return unreachable;
+      }
     }
-    if (key === 'i') await this.importConfig();
-    else if (key === 'o') await this.pickFolder();
-    else if (key === 'q') this.host.quit();
   }
 
   private async onConfirm(event: InputEvent): Promise<void> {
@@ -400,7 +469,7 @@ export class EasySshApp {
     const items = records.map(describe);
     let selected = items.findIndex((item) => item.id === this.selectedId);
     if (selected < 0) selected = 0;
-    this.screen = { kind: 'connections', items, selected, notice };
+    this.screen = { kind: 'connections', items, selected, notice, command: '' };
     this.host.setStatus(undefined);
     this.draw();
   }

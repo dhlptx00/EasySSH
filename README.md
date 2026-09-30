@@ -16,23 +16,21 @@ Easy SSH talks SSH directly from your computer. It does not install anything on 
 
 ## Open it
 
-Open the Command Palette and run **Easy SSH: Open**.
+Click the **Easy SSH** icon in the activity bar. The connection panel opens as a tab in the Terminal. Click the icon again to hide it.
 
-The session is a tab in the Terminal panel, next to your shell.
+## Commands
 
-## Keys
+On the connection panel, type a command and press Enter. Up and Down move the selection.
 
-### Connections
-
-| Key | Action |
+| Command | Action |
 | --- | --- |
-| Enter | Connect |
-| n | New connection |
-| e | Edit the selected connection |
-| d | Delete the selected connection |
-| i | Import `~/.ssh/config` |
-| o | Choose the local download folder |
-| q | Close the terminal |
+| /new | New connection |
+| /edit | Edit the selected connection |
+| /delete | Delete the selected connection |
+| /import | Import `~/.ssh/config` |
+| /folder | Choose the local download folder |
+| /quit | Close the terminal |
+| Enter | Connect to the selected connection |
 
 ### Remote directory
 
@@ -52,7 +50,7 @@ Passwords and key passphrases are hidden while you type. Press Enter on a saved 
 
 ## Downloads and uploads
 
-Downloaded files go to your Desktop. Run **Easy SSH: Set Download Folder**, or press `o`, to choose another folder. If the file name already exists, Easy SSH adds a number, such as `notes (1).txt`.
+Downloaded files go to your Desktop. Type `/folder` on the connection panel, press `o` while browsing, or run **Easy SSH: Set Download Folder**, to choose another folder. If the file name already exists, Easy SSH adds a number, such as `notes (1).txt`.
 
 To upload, drag files or folders from your desktop onto the Easy SSH terminal. They are written into the directory shown at the top. Press `u` when you want a file picker instead. Folders are uploaded with their contents. Symbolic links are skipped. A single drop is limited to 5000 files.
 

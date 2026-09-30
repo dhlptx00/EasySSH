@@ -58,6 +58,12 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
   private pty: EasySshPty | undefined;
   private terminal: vscode.Terminal | undefined;
   private app: EasySshApp | undefined;
+  /** True while the Easy SSH terminal panel is the one on screen. */
+  private shown = false;
+  /** True after this session maximized the panel. Restored when the terminal is hidden. */
+  private maximized = false;
+  /** Ignores focus changes caused by closing the side bar after an icon click. */
+  private settling = 0;
 
   constructor(
     private readonly store: ConnectionStore,
@@ -68,9 +74,53 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
     this.status.tooltip = 'Open Easy SSH';
   }
 
+  isShowing(): boolean {
+    return this.shown && this.terminal !== undefined && this.terminal.exitStatus === undefined;
+  }
+
+  hide(): void {
+    this.shown = false;
+    const terminal = this.terminal;
+    const restore = this.maximized;
+    this.maximized = false;
+    const hideTerminal = () => {
+      if (terminal && terminal.exitStatus === undefined) terminal.hide();
+    };
+    if (!restore) {
+      hideTerminal();
+      return;
+    }
+    void vscode.commands.executeCommand('workbench.action.toggleMaximizedPanel').then(hideTerminal, hideTerminal);
+  }
+
+  /** Call before moving the side bar so a click is counted once. Returns whether to hide. */
+  beginToggle(): boolean {
+    this.settling += 1;
+    return this.isShowing();
+  }
+
+  endToggle(hide: boolean): void {
+    if (hide) this.hide();
+    else this.open();
+    setTimeout(() => {
+      this.settling = Math.max(0, this.settling - 1);
+    }, 250);
+  }
+
+  noteActiveTerminal(terminal: vscode.Terminal | undefined): void {
+    if (this.settling > 0) return;
+    if (!this.terminal || this.terminal.exitStatus !== undefined) {
+      this.shown = false;
+      return;
+    }
+    this.shown = terminal === this.terminal;
+  }
+
   open(): void {
     if (this.terminal && this.terminal.exitStatus === undefined) {
+      this.shown = true;
       this.terminal.show();
+      this.maximizePanel();
       return;
     }
     let app!: EasySshApp;
@@ -84,7 +134,15 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
       isTransient: true,
       location: vscode.TerminalLocation.Panel,
     });
+    this.shown = true;
     this.terminal.show();
+    this.maximizePanel();
+  }
+
+  private maximizePanel(): void {
+    if (this.maximized) return;
+    this.maximized = true;
+    void vscode.commands.executeCommand('workbench.action.toggleMaximizedPanel');
   }
 
   onClosed(terminal: vscode.Terminal): void {
@@ -92,6 +150,11 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
     this.terminal = undefined;
     this.pty = undefined;
     this.app = undefined;
+    this.shown = false;
+    if (this.maximized) {
+      this.maximized = false;
+      void vscode.commands.executeCommand('workbench.action.toggleMaximizedPanel');
+    }
     this.status.text = '$(remote) Easy SSH';
   }
 

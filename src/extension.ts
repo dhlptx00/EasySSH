@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { EasySshController } from './controller';
+import { EasySshSidebar } from './sidebar';
 import { ConnectionStore } from './store';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -9,10 +10,14 @@ export function activate(context: vscode.ExtensionContext): void {
   status.show();
   const store = new ConnectionStore(context.globalState, context.secrets);
   const controller = new EasySshController(store, output, status);
+  const sidebar = new EasySshSidebar(controller);
 
   context.subscriptions.push(
     output,
     status,
+    sidebar,
+    vscode.window.onDidChangeActiveTerminal((terminal) => controller.noteActiveTerminal(terminal)),
+    vscode.window.registerWebviewViewProvider(EasySshSidebar.viewId, sidebar),
     vscode.commands.registerCommand('easySsh.open', () => controller.open()),
     vscode.commands.registerCommand('easySsh.setDownloadFolder', () => controller.setDownloadFolder()),
     vscode.commands.registerCommand('easySsh.resetHostKeys', () => controller.resetHostKeys()),

@@ -24,7 +24,8 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onCommand:easySsh.open"
+    "onCommand:easySsh.open",
+    "onView:easySsh.sidebar"
   ],
   "capabilities": {
     "virtualWorkspaces": true,
@@ -33,6 +34,25 @@
     }
   },
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "easy-ssh",
+          "title": "Easy SSH",
+          "icon": "media/easy-ssh.svg"
+        }
+      ]
+    },
+    "views": {
+      "easy-ssh": [
+        {
+          "type": "webview",
+          "id": "easySsh.sidebar",
+          "name": "Easy SSH",
+          "icon": "$(remote)"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "easySsh.open",

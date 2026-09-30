@@ -17,13 +17,23 @@ describe('terminal screen', () => {
     const frame = render({
       kind: 'connections',
       selected: 0,
+      command: '/edit',
       items: [{ id: '1', name: 'prod', userHost: 'root@10.0.0.8:22', detail: 'key' }],
     }, view);
     const text = frame.lines.map((line) => line.plain).join('\n');
     assert.match(text, /prod/);
     assert.match(text, /root@10\.0\.0\.8:22/);
     assert.match(text, /~\/Desktop/);
-    assert.match(text, /n new/);
+    assert.match(text, /\/edit/);
+    assert.match(text, /Easy SSH/);
+    assert.match(text, /0\.1\.0/);
+    assert.match(text, /╭/);
+    assert.ok(frame.cursor);
+    assert.match(frame.lines[frame.cursor.row].plain, /> \/edit/);
+    const newer = frame.lines.find((line) => line.plain.includes('New connection'));
+    const quit = frame.lines.find((line) => line.plain.includes('Quit'));
+    assert.ok(newer && quit);
+    assert.equal(newer.plain.lastIndexOf('/new') + '/new'.length, quit.plain.lastIndexOf('/quit') + '/quit'.length);
   });
 
   it('links a file name so a click can download it', () => {

@@ -10,7 +10,7 @@ export interface ConnectionItem {
 
 export type Screen =
   | { kind: 'loading' }
-  | { kind: 'connections'; items: ConnectionItem[]; selected: number; notice?: Notice }
+  | { kind: 'connections'; items: ConnectionItem[]; selected: number; notice?: Notice; command: string }
   | { kind: 'confirm'; item: ConnectionItem; choice: number; notice?: Notice }
   | {
       kind: 'wizard';
