@@ -14,6 +14,9 @@
     "url": "https://github.com/dhlptx00/EasySSH/issues"
   },
   "homepage": "https://github.com/dhlptx00/EasySSH#readme",
+  "sponsor": {
+    "url": "https://buymeacoffee.com/dhlptx00"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },

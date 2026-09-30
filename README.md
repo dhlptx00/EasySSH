@@ -1,5 +1,8 @@
 # Easy SSH
 
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/dhlptx00)
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/dhlptx00)
+
 ![Easy SSH overview: saved connections, sign-in options, jump hosts, a real login shell, click to download, and drop to upload](media/readme/infographic.png)
 
 A terminal for SSH connections inside VS Code and Cursor.
@@ -132,3 +135,10 @@ Press F5 in VS Code or Cursor. Both hosts use the same extension API, so there i
 ## Compared with SSH FS
 
 SSH FS mounts a remote system as a workspace folder and also provides tasks and remote shells. Easy SSH is the connection list and a login shell: type commands the way you would over `ssh`, click a file name to download it, and drop a file or folder to upload it.
+
+## Support
+
+If Easy SSH saves you time, you can support its development:
+
+- [GitHub Sponsors](https://github.com/sponsors/dhlptx00)
+- [Buy Me a Coffee](https://buymeacoffee.com/dhlptx00)
