@@ -27,8 +27,8 @@ export interface SlashTarget {
 /** System commands shown in the slash picker, in menu order. */
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'new', aliases: ['add'], description: 'Add a connection', group: 'command' },
-  { name: 'edit', aliases: ['modify'], description: 'Edit the selected connection', group: 'command' },
-  { name: 'delete', aliases: ['del', 'rm', 'remove'], description: 'Delete the selected connection', group: 'command' },
+  { name: 'edit', aliases: ['modify'], description: 'Choose a connection to edit', group: 'command' },
+  { name: 'delete', aliases: ['del', 'rm', 'remove'], description: 'Choose a connection to delete', group: 'command' },
   { name: 'import', aliases: [], description: 'Import hosts from ~/.ssh/config', group: 'command' },
   { name: 'folder', aliases: ['download'], description: 'Choose the download folder', group: 'command' },
   { name: 'quit', aliases: ['exit', 'q'], description: 'Close the terminal', group: 'command' },

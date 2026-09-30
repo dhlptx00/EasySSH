@@ -12,6 +12,7 @@ export type Screen =
   | { kind: 'loading' }
   | { kind: 'connections'; items: ConnectionItem[]; selected: number; notice?: Notice; command: string; pick: number }
   | { kind: 'confirm'; item: ConnectionItem; choice: number; notice?: Notice }
+  | { kind: 'pick'; mode: 'edit' | 'delete'; items: ConnectionItem[]; selected: number; notice?: Notice }
   | {
       kind: 'wizard';
       title: string;
@@ -34,6 +35,14 @@ export type Screen =
       selected: number;
       notice?: Notice;
       transfer?: TransferState;
-      /** Null hides the path prompt. An empty string shows it. */
-      goto: string | null;
+      /** The Linux command being typed. */
+      command: string;
+      /** Remote transcript, kept as the server printed it. */
+      output: string;
+      /** Lines hidden below the newest output. 0 follows the tail. */
+      scroll?: number;
+      /** File under the pointer. Its name is underlined. */
+      hoverPath?: string;
+      /** File in the pressed click state. */
+      pressedPath?: string;
     };

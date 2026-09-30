@@ -70,7 +70,7 @@ describe('terminal screen', () => {
     }, view);
     const menu = filtered.lines.map((line) => line.plain).join('\n');
     assert.match(menu, /> \/edit/);
-    assert.match(menu, /Edit the selected connection/);
+    assert.match(menu, /Choose a connection to edit/);
     assert.match(menu, /Commands/);
     assert.doesNotMatch(menu, /Add a connection/);
     assert.doesNotMatch(menu, /> \/prod/);
@@ -108,7 +108,7 @@ describe('terminal screen', () => {
     assert.match(typed.lines[typed.cursor.row].plain, /> 10\.0\.0\.8/);
   });
 
-  it('links a file name so a click can download it', () => {
+  it('shows Linux output in a box and links a file name', () => {
     const file: BrowseEntry = {
       name: 'README.md',
       path: '/var/www/README.md',
@@ -124,19 +124,125 @@ describe('terminal screen', () => {
       entries: [
         { name: '..', path: '/var', kind: 'dir', size: 0, mtime: 0 },
         file,
+        { name: 'secret-list-only', path: '/var/www/secret-list-only', kind: 'file', size: 1, mtime: 0 },
       ],
       selected: 1,
-      goto: null,
+      command: '',
+      output: 'README.md\nnotes',
     }, view);
-    const row = frame.lines.find((line) => line.plain.includes('README.md'));
-    assert.ok(row);
-    const link = frame.links.get(row.plain.trimEnd());
+    const text = frame.lines.map((line) => line.plain).join('\n');
+    assert.match(text, /README\.md/);
+    assert.doesNotMatch(text, /secret-list-only/);
+    assert.doesNotMatch(text, /4 KB/);
+    const hintAt = frame.lines.findIndex((line) => line.plain.includes('Click a file name'));
+    const outputAt = frame.lines.findIndex((line) => line.plain.includes('README.md'));
+    assert.ok(hintAt > 0 && hintAt < outputAt);
+    assert.match(frame.lines[hintAt - 1].plain, /╭/);
+    assert.ok(frame.lines[hintAt - 1].plain.indexOf('╭') > 0);
+    assert.match(frame.lines[hintAt].plain, /│/);
+    const hint = text.replace(/[│╭╮╰╯─]/g, ' ').replace(/\s+/g, ' ');
+    assert.match(hint, /Click a file name to download it to the Desktop/);
+    assert.match(hint, /Drag a folder here to upload it into this directory/);
+    const row = frame.lines[outputAt];
+    const link = frame.links.get(row.plain.trimEnd())?.[0];
     assert.equal(link?.remotePath, '/var/www/README.md');
     assert.equal(link?.kind, 'file');
     assert.equal(row.plain.indexOf('README.md'), link?.start);
+    assert.ok(frame.cursor);
+    assert.match(frame.lines[frame.cursor.row].plain, /\$ /);
+  });
+
+  it('underlines a file name on hover and shows a pressed click', () => {
+    const file: BrowseEntry = {
+      name: 'README.md',
+      path: '/var/www/README.md',
+      kind: 'file',
+      size: 1200,
+      mtime: Date.parse('2026-09-29T18:10:00'),
+    };
+    const base = {
+      kind: 'browse' as const,
+      title: 'prod',
+      userHost: 'root@10.0.0.8:22',
+      cwd: '/var/www',
+      entries: [file],
+      selected: 0,
+      command: '',
+      output: 'README.md',
+    };
+    const hover = render({ ...base, hoverPath: file.path }, view);
+    const hovered = hover.lines.find((line) => line.plain.includes('README.md'));
+    assert.ok(hovered);
+    assert.match(hovered.styled, /\x1b\[4m/);
+    const pressed = render({ ...base, pressedPath: file.path }, view);
+    const row = pressed.lines.find((line) => line.plain.includes('README.md'));
+    assert.ok(row);
+    assert.match(row.styled, /48;2;48;48;48/);
+    assert.match(row.plain, /README\.md/);
+  });
+
+  it('lists connections before edit or delete', () => {
+    const items = [
+      { id: '1', name: 'prod', userHost: 'root@10.0.0.8:22', detail: 'key' },
+      { id: '2', name: 'beta', userHost: 'admin@10.0.0.9:22', detail: 'password' },
+    ];
+    const frame = render({ kind: 'pick', mode: 'edit', items, selected: 1 }, view);
     const text = frame.lines.map((line) => line.plain).join('\n');
-    assert.match(text, /cmd-click a file to download/);
-    assert.match(text, /drop files to upload/);
+    assert.match(text, /Edit connection/);
+    assert.match(text, /prod/);
+    assert.match(text, /beta/);
+    assert.match(text, /admin@10\.0\.0\.9:22/);
+    const selected = frame.lines.find((line) => line.plain.includes('beta'));
+    assert.match(selected?.styled ?? '', /48;2;48;48;48/);
+    assert.doesNotMatch(text, /Delete beta\?/);
+  });
+
+  it('grows each page with the terminal', () => {
+    const wide = { ...view, cols: 160, rows: 40 };
+    const home = render({
+      kind: 'connections',
+      selected: 0,
+      command: '',
+      pick: 0,
+      items: [{ id: '1', name: 'prod', userHost: 'root@10.0.0.8:22', detail: 'key' }],
+    }, wide);
+    assert.ok(home.cursor);
+    const homeBar = home.lines[0].plain.trim();
+    assert.ok(homeBar.startsWith('╭') && homeBar.endsWith('╮'));
+    assert.ok(homeBar.length >= 150);
+    const promptTop = home.cursor.row - 1;
+    let cardBottom = -1;
+    for (let index = 0; index < promptTop; index += 1) {
+      if (home.lines[index].plain.includes('╰')) cardBottom = index;
+    }
+    assert.equal(promptTop - cardBottom, 2);
+    assert.ok(home.lines[promptTop].plain.trim().length >= 150);
+
+    const wizard = render({
+      kind: 'wizard',
+      title: 'new connection',
+      draft: emptyDraft(),
+      step: 'host',
+      input: '',
+      pick: 0,
+    }, wide);
+    assert.ok(wizard.lines[0].plain.trim().startsWith('╭'));
+    assert.ok(wizard.lines[0].plain.trim().length >= 150);
+
+    const shell = render({
+      kind: 'browse',
+      title: 'prod',
+      userHost: 'root@10.0.0.8:22',
+      cwd: '/var/www',
+      entries: [],
+      selected: 0,
+      command: '',
+      output: 'README.md',
+    }, wide);
+    const shellBar = shell.lines[0].plain.trim();
+    assert.ok(shellBar.startsWith('╭') && shellBar.length >= 150);
+    assert.ok(shell.cursor);
+    assert.ok(shell.lines[shell.cursor.row - 1].plain.trim().length >= 150);
   });
 
   it('shows the wizard prompt', () => {

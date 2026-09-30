@@ -26,6 +26,7 @@ export function humanizeSshError(err: unknown): string {
   if (code === 'ECONNREFUSED') return 'Connection refused';
   if (code === 'ETIMEDOUT' || /timed out/i.test(message)) return 'Connection timed out';
   if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') return 'Network unreachable';
+  if (code === 'EACCES' || code === 'EPERM') return 'Cannot write to the download folder. Allow the editor to access the Desktop.';
   if (/authentication methods failed/i.test(message) || /all configured authentication/i.test(message)) {
     return 'Authentication failed';
   }

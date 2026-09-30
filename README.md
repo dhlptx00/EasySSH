@@ -10,9 +10,10 @@ Easy SSH talks SSH directly from your computer. It does not install anything on 
 - Sign in with a password, a private key, or an SSH agent
 - Hop through one or more jump hosts
 - Import hosts from `~/.ssh/config`
-- Open a remote Linux directory
-- Click a file to download it to your computer
-- Drop local files or folders onto the terminal to upload them into the current directory
+- Open a remote Linux shell in your home directory
+- Type a command and press Enter. `cd` changes the directory
+- Click a file name in the command output to download it to your Desktop
+- Drag a file or folder onto the terminal to upload it into the current directory
 
 ## Open it
 
@@ -26,34 +27,36 @@ On the connection panel, type `/` to open the command list. Connections and syst
 | --- | --- |
 | /name | Connect to the saved connection with that name |
 | /new | New connection |
-| /edit | Edit the selected connection |
-| /delete | Delete the selected connection |
+| /edit | Choose a connection, then edit it |
+| /delete | Choose a connection, then delete it |
 | /import | Import `~/.ssh/config` |
 | /folder | Choose the local download folder |
 | /quit | Close the terminal |
 | Enter | Connect to the selected connection |
 
-### Remote directory
+### Remote shell
 
-| Key | Action |
+A connection opens in the remote home directory. The window has three boxes: a centered hint at the top, the remote output in the middle, and the `$` prompt at the bottom. Type a Linux command and press Enter. The middle box shows that command's output as the server printed it. `cd` and `cd /path` move to that directory. `exit` disconnects. Up and Down recall earlier commands.
+
+The top box says how files move: click a file name in the output to download it to the Desktop, and drag a file or folder onto the terminal to upload it into the current directory. Moving the pointer over a file name underlines it. Pressing the mouse button highlights that name until you release it.
+
+| Action | Result |
 | --- | --- |
-| Enter | Open a directory, or download a file |
-| Click the name | Same as Enter. Hold Command on macOS, or Ctrl on Windows and Linux. |
-| Drop files | Upload them into the current directory |
-| u | Pick local files to upload |
-| Backspace | Go up one directory |
-| g | Go to a path |
-| r | Refresh |
-| q | Disconnect |
-| Ctrl+C | Cancel a transfer, or leave the current prompt |
+| Enter | Run the typed command |
+| `cd` path | Change the current directory |
+| Click a file name | Download it to the Desktop |
+| Click a directory name | `cd` into it |
+| Drag a file or folder here | Upload it into the current directory |
+| Ctrl+C | Cancel a command or transfer, clear the line, or disconnect |
+| `exit` | Disconnect |
 
-Passwords and key passphrases are hidden while you type. Press Enter on a saved secret to keep it. Authentication, the remote directory, and the jump host are choices: move with Up and Down, then press Enter. A custom path or jump host is the only extra text. For a jump host, type `user@host:port`. Separate extra hops with commas.
+Passwords and key passphrases are hidden while you type. Press Enter on a saved secret to keep it. Authentication and the jump host are choices: move with Up and Down, then press Enter. A custom jump host is the only extra text. Type `user@host:port`. Separate extra hops with commas.
 
 ## Downloads and uploads
 
-Downloaded files go to your Desktop. Type `/folder` on the connection panel, press `o` while browsing, or run **Easy SSH: Set Download Folder**, to choose another folder. If the file name already exists, Easy SSH adds a number, such as `notes (1).txt`.
+Downloaded files go to your Desktop. Type `/folder` on the connection panel, or run **Easy SSH: Set Download Folder**, to choose another folder. If the file name already exists, Easy SSH adds a number, such as `notes (1).txt`.
 
-To upload, drag files or folders from your desktop onto the Easy SSH terminal. They are written into the directory shown at the top. Press `u` when you want a file picker instead. Folders are uploaded with their contents. Symbolic links are skipped. A single drop is limited to 5000 files.
+To upload, drag a file or a folder from your desktop onto the Easy SSH terminal. It is written into the current Linux directory. A folder is uploaded with its contents. Symbolic links inside a folder are skipped. A single drop is limited to 5000 files.
 
 ## Internal and external networks
 
@@ -77,4 +80,4 @@ Press F5 in VS Code or Cursor. Both hosts use the same extension API, so there i
 
 ## Compared with SSH FS
 
-SSH FS mounts a remote system as a workspace folder and also provides tasks and remote shells. Easy SSH is only the connection list and the directory you are in: click a file to download it, and drop files to upload them.
+SSH FS mounts a remote system as a workspace folder and also provides tasks and remote shells. Easy SSH is the connection list and a shell in the current directory: type a command, click a file name in the output to download it, and drop a file or folder to upload it.

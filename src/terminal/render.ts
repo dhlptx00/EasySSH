@@ -1,5 +1,6 @@
-import { formatFingerprint, formatSize, formatTime, padLeft, shortenPath, truncate, displayWidth } from '../text';
+import { formatFingerprint, shortenPath, truncate, displayWidth } from '../text';
 import type { BrowseEntry, Notice, TransferState } from '../types';
+import { emphasize, wrapTerminal, type TermLine } from './ansi';
 import { assignConnectionTokens, matchSlashCommands, type SlashCommand, type SlashTarget } from './commands';
 import type { Screen } from './screen';
 import { choiceOptions, promptFor, stepValue, stepsBefore } from './wizard';
@@ -20,7 +21,7 @@ export interface PaintedLine {
 export interface Frame {
   lines: PaintedLine[];
   cursor?: { row: number; col: number };
-  links: Map<string, LineLink>;
+  links: Map<string, LineLink[]>;
 }
 
 export interface RenderView {
@@ -37,6 +38,7 @@ interface Piece {
   text: string;
   tone?: Tone;
   bold?: boolean;
+  underline?: boolean;
 }
 
 const FG: Record<Tone, string> = {
@@ -50,6 +52,21 @@ const FG: Record<Tone, string> = {
 };
 
 const VERSION = '0.1.0';
+const PROMPT_BLOCK = 3;
+const FRAME_GAP = 1;
+
+/** Nearly the full terminal, with a small margin so the corners are not flush with the edge. */
+function pageColumn(cols: number): { left: number; width: number } {
+  const margin = cols >= 48 ? 2 : 1;
+  const width = Math.min(cols, Math.max(20, cols - margin * 2));
+  const left = Math.max(0, Math.floor((cols - width) / 2));
+  return { left, width: Math.min(width, cols - left) };
+}
+
+/** Inner rows of a card that runs from the top of the terminal to just above the prompt. */
+function frameBudget(rows: number): number {
+  return Math.max(1, rows - FRAME_GAP - PROMPT_BLOCK - 2);
+}
 
 const LOGO = [
   '  ·····  ',
@@ -63,9 +80,10 @@ function paintPieces(pieces: Piece[], width: number, selected = false): PaintedL
   let plain = '';
   let styled = '';
   let used = 0;
-  const open = (tone: Tone, bold: boolean) => {
+  const open = (tone: Tone, bold: boolean, underline: boolean) => {
     const parts = ['0'];
     if (bold) parts.push('1');
+    if (underline) parts.push('4');
     parts.push(`38;2;${FG[tone]}`);
     if (selected) parts.push('48;2;48;48;48');
     return `\x1b[${parts.join(';')}m`;
@@ -79,13 +97,13 @@ function paintPieces(pieces: Piece[], width: number, selected = false): PaintedL
     // the ellipsis from a later column when this piece is only a spacer.
     const fitted = displayWidth(piece.text) <= room ? piece.text : shown;
     plain += fitted;
-    styled += open(piece.tone ?? 'text', Boolean(piece.bold)) + fitted;
+    styled += open(piece.tone ?? 'text', Boolean(piece.bold), Boolean(piece.underline)) + fitted;
     used += displayWidth(fitted);
   }
   if (used < width) {
     const gap = ' '.repeat(width - used);
     plain += gap;
-    if (selected) styled += open('text', false) + gap;
+    if (selected) styled += open('text', false, false) + gap;
     else styled += gap;
   }
   styled += '\x1b[0m';
@@ -135,16 +153,9 @@ function progressLine(transfer: TransferState, width: number): PaintedLine {
   );
 }
 
-function entryName(entry: BrowseEntry): string {
-  if (entry.name === '..') return '../';
-  if (entry.kind === 'dir') return `${entry.name}/`;
-  if (entry.kind === 'link') return `${entry.name}@`;
-  return entry.name;
-}
-
 export function render(screen: Screen, view: RenderView): Frame {
   const { cols, rows } = view;
-  const links = new Map<string, LineLink>();
+  const links = new Map<string, LineLink[]>();
   if (cols < 24 || rows < 6) {
     return {
       lines: fit([paintPieces([{ text: 'Resize the terminal', tone: 'muted' }], Math.max(cols, 1))], rows, Math.max(cols, 1)),
@@ -153,6 +164,7 @@ export function render(screen: Screen, view: RenderView): Frame {
   }
 
   if (screen.kind === 'connections') return renderHome(screen, view);
+  if (screen.kind === 'browse') return renderShell(screen, view);
   return renderPanel(screen, view);
 }
 
@@ -163,26 +175,17 @@ function stepValueLabel(step: string): string {
   return step;
 }
 
-interface RowLink {
-  needle: string;
-  remotePath: string;
-  kind: 'file' | 'dir';
-  tooltip: string;
-}
-
 interface PanelInput {
   text: string;
   editable: boolean;
   meta: string;
+  prefix?: string;
 }
 
-function renderPanel(screen: Exclude<Screen, { kind: 'connections' }>, view: RenderView): Frame {
-  const links = new Map<string, LineLink>();
-  const cardWidth = Math.min(72, Math.max(20, view.cols - 8));
-  const innerWidth = cardWidth - 2;
-  const contentWidth = Math.max(8, innerWidth - 4);
-  const budget = panelBudget(view.rows);
-  let rowLinks: (RowLink | undefined)[] | undefined;
+function renderPanel(screen: Exclude<Screen, { kind: 'connections' | 'browse' }>, view: RenderView): Frame {
+  const links = new Map<string, LineLink[]>();
+  const contentWidth = Math.max(8, pageColumn(view.cols).width - 6);
+  const budget = frameBudget(view.rows);
   let anchor: 'start' | 'end' = 'start';
   let content: PaintedLine[];
   let input: PanelInput;
@@ -195,6 +198,9 @@ function renderPanel(screen: Exclude<Screen, { kind: 'connections' }>, view: Ren
     input = { text: 'ctrl+c cancel', editable: false, meta: '' };
   } else if (screen.kind === 'confirm') {
     content = choiceCard(`Delete ${screen.item.name}?`, 'This removes the saved connection.', ['No', 'Yes, delete'], screen.choice, contentWidth, screen.notice);
+    input = { text: 'Enter to confirm', editable: false, meta: '' };
+  } else if (screen.kind === 'pick') {
+    content = pickCard(screen, contentWidth, budget);
     input = { text: 'Enter to confirm', editable: false, meta: '' };
   } else if (screen.kind === 'trust') {
     content = [
@@ -220,20 +226,233 @@ function renderPanel(screen: Exclude<Screen, { kind: 'connections' }>, view: Ren
     }
     anchor = 'end';
   } else {
-    const built = browseCard(screen, view, contentWidth, budget);
-    content = built.lines;
-    rowLinks = built.rowLinks;
-    if (screen.transfer) input = { text: 'ctrl+c cancel', editable: false, meta: '' };
-    else if (screen.goto !== null) input = { text: screen.goto, editable: true, meta: shortenPath(screen.cwd, view.home, 24) };
-    else input = { text: 'g path', editable: false, meta: shortenPath(screen.cwd, view.home, 40) };
+    const unreachable: never = screen;
+    return unreachable;
   }
 
-  return placePanel(content, rowLinks, view, input, anchor, links);
+  return placePanel(content, view, input, anchor, links);
 }
 
-function panelBudget(rows: number): number {
-  const top = rows >= 30 ? 2 : 1;
-  return Math.max(4, rows - top - 1 - 3 - 2);
+const BROWSE_HINT = 'Click a file name to download it to the Desktop. Drag a folder here to upload it into this directory.';
+
+function shellColumn(cols: number): { left: number; width: number } {
+  return pageColumn(cols);
+}
+
+function renderShell(screen: Extract<Screen, { kind: 'browse' }>, view: RenderView): Frame {
+  const { cols, rows } = view;
+  const links = new Map<string, LineLink[]>();
+  const lines = Array.from({ length: rows }, () => blank(cols));
+  const { left, width } = shellColumn(cols);
+  const promptBlock = 3;
+  const promptTop = rows - promptBlock;
+  const hint = hintFrame(BROWSE_HINT, left, width, cols);
+  hint.forEach((line, index) => {
+    if (index < promptTop) lines[index] = line;
+  });
+  const outputTop = Math.min(hint.length + 1, Math.max(0, promptTop - 4));
+  const outputHeight = promptTop - 1 - outputTop;
+  if (outputHeight >= 3) {
+    const box = outputFrame(screen, left, width, cols, outputHeight, links);
+    box.forEach((line, index) => {
+      const row = outputTop + index;
+      if (row >= 0 && row < promptTop) lines[row] = line;
+    });
+  }
+  const editable = !screen.transfer;
+  const prompt = frameInput(
+    editable ? screen.command : 'ctrl+c cancel',
+    editable,
+    editable ? shortenPath(screen.cwd, view.home, 40) : '',
+    left,
+    width - 2,
+    cols,
+    editable ? '$' : '',
+  );
+  prompt.lines.forEach((line, index) => {
+    if (promptTop + index < rows) lines[promptTop + index] = line;
+  });
+  const cursor = editable && prompt.cursorCol !== undefined ? { row: promptTop + 1, col: prompt.cursorCol } : undefined;
+  return { lines, cursor, links };
+}
+
+function hintFrame(text: string, left: number, width: number, cols: number): PaintedLine[] {
+  const innerWidth = Math.max(4, width - 2);
+  const contentWidth = Math.max(4, innerWidth - 4);
+  const wrapped = wrapWords(text, contentWidth);
+  const lines = [rule(left, width, cols, true)];
+  for (const row of wrapped) {
+    const gap = Math.max(0, contentWidth - displayWidth(row));
+    const lead = Math.floor(gap / 2);
+    const content = paintPieces([
+      { text: ' '.repeat(lead) },
+      { text: row, tone: 'muted' },
+      { text: ' '.repeat(gap - lead) },
+    ], contentWidth);
+    const padded = joinPainted([
+      paintPieces([{ text: '  ' }], 2),
+      content,
+      paintPieces([{ text: '  ' }], 2),
+    ], innerWidth);
+    lines.push(boxSides(left, padded, cols));
+  }
+  lines.push(rule(left, width, cols, false));
+  return lines;
+}
+
+function wrapWords(text: string, width: number): string[] {
+  const rows: string[] = [];
+  let current = '';
+  for (const word of text.split(' ')) {
+    const next = current ? `${current} ${word}` : word;
+    if (current && displayWidth(next) > width) {
+      rows.push(current);
+      current = word;
+    } else current = next;
+  }
+  if (current) rows.push(current);
+  return rows.length > 0 ? rows : [''];
+}
+
+function outputFrame(
+  screen: Extract<Screen, { kind: 'browse' }>,
+  left: number,
+  width: number,
+  cols: number,
+  height: number,
+  links: Map<string, LineLink[]>,
+): PaintedLine[] {
+  const innerWidth = Math.max(4, width - 2);
+  const contentWidth = Math.max(4, innerWidth - 2);
+  const inner = Math.max(1, height - 2);
+  const footer = screen.transfer
+    ? progressLine(screen.transfer, contentWidth)
+    : noticeLine(screen.notice, contentWidth);
+  const textRows = footer ? Math.max(0, inner - 1) : inner;
+  const wrapped = screen.output ? wrapTerminal(screen.output, contentWidth) : [];
+  const maxScroll = Math.max(0, wrapped.length - textRows);
+  const scroll = Math.max(0, Math.min(screen.scroll ?? 0, maxScroll));
+  const start = Math.max(0, wrapped.length - textRows - scroll);
+  const visible = wrapped.slice(start, start + textRows);
+  while (visible.length < textRows) visible.push({ plain: '', styled: '\x1b[0m' });
+
+  const lines = [rule(left, width, cols, true)];
+  for (const row of visible) lines.push(outputRow(screen, row, left, contentWidth, innerWidth, cols, links));
+  if (footer) lines.push(plainRow(footer, left, innerWidth, cols));
+  lines.push(rule(left, width, cols, false));
+  return lines;
+}
+
+function outputRow(
+  screen: Extract<Screen, { kind: 'browse' }>,
+  row: TermLine,
+  left: number,
+  contentWidth: number,
+  innerWidth: number,
+  cols: number,
+  links: Map<string, LineLink[]>,
+): PaintedLine {
+  const spans = nameSpans(row.plain, screen.entries);
+  const painted = emphasize(row, spans
+    .filter((span) => span.remotePath === screen.hoverPath || span.remotePath === screen.pressedPath)
+    .map((span) => ({
+      start: span.start,
+      length: span.length,
+      selected: span.remotePath === screen.pressedPath,
+    })));
+  const gap = Math.max(0, contentWidth - displayWidth(painted.plain));
+  const body = painted.styled.endsWith('\x1b[0m') ? painted.styled.slice(0, -4) : painted.styled;
+  const content: PaintedLine = { plain: painted.plain + ' '.repeat(gap), styled: `${body}${' '.repeat(gap)}\x1b[0m` };
+  const padded = joinPainted([
+    paintPieces([{ text: ' ' }], 1),
+    content,
+    paintPieces([{ text: ' ' }], 1),
+  ], innerWidth);
+  const full = boxSides(left, padded, cols);
+  const origin = left + 2;
+  for (const span of spans) {
+    const key = full.plain.trimEnd();
+    const list = links.get(key) ?? [];
+    list.push({
+      start: origin + span.start,
+      length: span.length,
+      remotePath: span.remotePath,
+      kind: span.kind,
+      tooltip: span.tooltip,
+    });
+    links.set(key, list);
+  }
+  return full;
+}
+
+function plainRow(line: PaintedLine, left: number, innerWidth: number, cols: number): PaintedLine {
+  const padded = joinPainted([
+    paintPieces([{ text: ' ' }], 1),
+    line,
+    paintPieces([{ text: ' ' }], 1),
+  ], innerWidth);
+  return boxSides(left, padded, cols);
+}
+
+function nameSpans(plain: string, entries: BrowseEntry[]): LineLink[] {
+  const ranked = entries
+    .filter((entry) => entry.name && entry.name !== '..' && entry.name !== '.')
+    .sort((a, b) => b.name.length - a.name.length || a.name.localeCompare(b.name));
+  const taken = new Array<boolean>(plain.length).fill(false);
+  const found: LineLink[] = [];
+  for (const entry of ranked) {
+    let from = 0;
+    while (from < plain.length) {
+      const at = plain.indexOf(entry.name, from);
+      if (at < 0) break;
+      const end = at + entry.name.length;
+      const before = at === 0 || isNameBoundary(plain[at - 1], 'before');
+      const after = end === plain.length || isNameBoundary(plain[end] ?? '', 'after');
+      let overlap = false;
+      for (let index = at; index < end; index += 1) if (taken[index]) overlap = true;
+      if (before && after && !overlap) {
+        for (let index = at; index < end; index += 1) taken[index] = true;
+        const kind = entry.kind === 'dir' ? 'dir' : 'file';
+        found.push({
+          start: at,
+          length: entry.name.length,
+          remotePath: entry.path,
+          kind,
+          tooltip: kind === 'dir' ? `cd ${entry.name}` : `Download ${entry.name} to the Desktop`,
+        });
+      }
+      from = at + Math.max(1, entry.name.length);
+    }
+  }
+  return found;
+}
+
+function isNameBoundary(ch: string, side: 'before' | 'after'): boolean {
+  if (side === 'after' && (ch === '/' || ch === '@' || ch === '*')) return true;
+  return /[\s'"\\|=<>&;()[\]{},]/.test(ch);
+}
+
+function pickCard(screen: Extract<Screen, { kind: 'pick' }>, width: number, budget: number): PaintedLine[] {
+  const title = screen.mode === 'edit' ? 'Edit connection' : 'Delete connection';
+  const hint = screen.mode === 'edit'
+    ? 'Choose a connection, then press Enter to edit it.'
+    : 'Choose a connection, then press Enter to delete it.';
+  const head: PaintedLine[] = [
+    blank(width),
+    paintPieces([{ text: title, bold: true }], width),
+    paintPieces([{ text: truncate(hint, width), tone: 'muted' }], width),
+  ];
+  const note = noticeLine(screen.notice, width);
+  if (note) head.push(note);
+  head.push(blank(width));
+  const listRoom = Math.max(1, budget - head.length - 1);
+  const visible = windowed(screen.items, screen.selected, listRoom);
+  const offset = Math.max(0, screen.items.indexOf(visible[0] ?? screen.items[0]));
+  const rows = visible.map((item, index) => {
+    const selected = offset + index === screen.selected;
+    return paintPieces(splitLine(item.name, `${item.detail}  ${item.userHost}`, '', width, selected), width, selected);
+  });
+  return [...head, ...rows, blank(width)];
 }
 
 function titled(title: string, subtitle: string, width: number): PaintedLine[] {
@@ -312,83 +531,29 @@ function wizardCard(screen: Extract<Screen, { kind: 'wizard' }>, width: number, 
   return lines;
 }
 
-function browseCard(
-  screen: Extract<Screen, { kind: 'browse' }>,
-  view: RenderView,
-  width: number,
-  budget: number,
-): { lines: PaintedLine[]; rowLinks: (RowLink | undefined)[] } {
-  const lines: PaintedLine[] = [
-    blank(width),
-    paintPieces([{ text: truncate(screen.title, width), bold: true }], width),
-    paintPieces([{ text: truncate(screen.userHost, width), tone: 'muted' }], width),
-    paintPieces([{ text: truncate(screen.cwd, width), tone: 'blue' }], width),
-    paintPieces([{ text: truncate(`${view.clickHint}   drop files to upload`, width), tone: 'muted' }], width),
-  ];
-  if (screen.transfer) lines.push(progressLine(screen.transfer, width));
-  else {
-    const note = noticeLine(screen.notice, width);
-    if (note) lines.push(note);
-  }
-  lines.push(blank(width));
-  const listHeight = Math.max(1, budget - lines.length - 1);
-  const visible = windowed(screen.entries, screen.selected, listHeight);
-  const offset = visible[0] ? screen.entries.indexOf(visible[0]) : 0;
-  const rowLinks: (RowLink | undefined)[] = lines.map(() => undefined);
-  if (screen.entries.length === 0) {
-    lines.push(paintPieces([{ text: '(empty)', tone: 'muted' }], width));
-    rowLinks.push(undefined);
-  }
-  visible.forEach((entry, index) => {
-    const selected = offset + index === screen.selected;
-    const painted = fileRow(entry, selected, width);
-    lines.push(painted.line);
-    rowLinks.push(painted.link ? {
-      needle: painted.shown,
-      remotePath: painted.link.remotePath,
-      kind: painted.link.kind,
-      tooltip: painted.link.tooltip,
-    } : undefined);
-  });
-  lines.push(blank(width));
-  rowLinks.push(undefined);
-  return { lines, rowLinks };
-}
-
 function placePanel(
   content: PaintedLine[],
-  rowLinks: (RowLink | undefined)[] | undefined,
   view: RenderView,
   input: PanelInput,
   anchor: 'start' | 'end',
-  links: Map<string, LineLink>,
+  links: Map<string, LineLink[]>,
 ): Frame {
   const { cols, rows } = view;
-  const cardWidth = Math.min(72, Math.max(20, cols - 8));
-  const cardLeft = Math.max(0, Math.floor((cols - cardWidth) / 2));
-  const innerWidth = cardWidth - 2;
-  const promptWidth = Math.min(cols - 2, Math.max(cardWidth, Math.min(cols - 4, cardWidth + 8)));
-  const promptLeft = Math.max(0, Math.floor((cols - promptWidth) / 2));
-  const promptBlock = 3;
-  const top = rows >= 30 ? 2 : 1;
-  const gap = 1;
-  const maxInner = Math.max(1, rows - top - gap - promptBlock - 2);
+  const { left, width } = pageColumn(cols);
+  const innerWidth = width - 2;
+  const contentWidth = Math.max(1, innerWidth - 4);
+  const promptTop = rows - PROMPT_BLOCK;
+  const cardBottom = Math.max(0, promptTop - FRAME_GAP);
+  const maxInner = Math.max(1, cardBottom - 2);
   let body = content;
-  let linksForRows = rowLinks ?? content.map(() => undefined);
-  if (body.length > maxInner) {
-    body = anchor === 'end' ? body.slice(body.length - maxInner) : body.slice(0, maxInner);
-    linksForRows = anchor === 'end' ? linksForRows.slice(linksForRows.length - maxInner) : linksForRows.slice(0, maxInner);
-  }
-  const card = frameCardLines(body, linksForRows, cardLeft, innerWidth, cols, links);
-  const prompt = frameInput(input.text, input.editable, input.meta, promptLeft, promptWidth - 2, cols);
+  if (body.length > maxInner) body = anchor === 'end' ? body.slice(body.length - maxInner) : body.slice(0, maxInner);
+  else body = centerLines(body, maxInner, contentWidth);
+  const paintedCard = frameCardLines(body, left, innerWidth, cols);
+  const prompt = frameInput(input.text, input.editable, input.meta, left, width - 2, cols, input.prefix ?? '>');
   const lines = Array.from({ length: rows }, () => blank(cols));
-  const room = Math.max(0, rows - promptBlock - gap);
-  const cardTop = Math.min(top, Math.max(0, room - card.length));
-  card.forEach((line, index) => {
-    const row = cardTop + index;
-    if (row >= 0 && row < room) lines[row] = line;
+  paintedCard.forEach((line, index) => {
+    if (index < cardBottom && index < rows) lines[index] = line;
   });
-  const promptTop = rows - promptBlock;
   prompt.lines.forEach((line, index) => {
     if (promptTop + index < rows) lines[promptTop + index] = line;
   });
@@ -396,37 +561,39 @@ function placePanel(
   return { lines, cursor, links };
 }
 
+function centerLines(lines: PaintedLine[], height: number, width: number): PaintedLine[] {
+  if (lines.length >= height) return lines;
+  const pad = height - lines.length;
+  const top = Math.floor(pad / 2);
+  const filler = () => blank(width);
+  return [...Array.from({ length: top }, filler), ...lines, ...Array.from({ length: pad - top }, filler)];
+}
+
+function centerPieces(lines: Piece[][], height: number): Piece[][] {
+  if (lines.length >= height) return lines;
+  const pad = height - lines.length;
+  const top = Math.floor(pad / 2);
+  const filler = (): Piece[] => [];
+  return [...Array.from({ length: top }, filler), ...lines, ...Array.from({ length: pad - top }, filler)];
+}
+
 function frameCardLines(
   content: PaintedLine[],
-  rowLinks: (RowLink | undefined)[],
   left: number,
   innerWidth: number,
   cols: number,
-  links: Map<string, LineLink>,
 ): PaintedLine[] {
   const contentWidth = Math.max(1, innerWidth - 4);
   const lines = [rule(left, innerWidth + 2, cols, true)];
-  content.forEach((row, index) => {
+  for (const row of content) {
     const fitted = fitWidth(row, contentWidth);
     const padded = joinPainted([
       paintPieces([{ text: '  ' }], 2),
       fitted,
       paintPieces([{ text: '  ' }], 2),
     ], innerWidth);
-    const full = boxSides(left, padded, cols);
-    lines.push(full);
-    const link = rowLinks[index];
-    if (!link) return;
-    const at = full.plain.indexOf(link.needle);
-    if (at < 0) return;
-    links.set(full.plain.trimEnd(), {
-      start: at,
-      length: link.needle.length,
-      remotePath: link.remotePath,
-      kind: link.kind,
-      tooltip: link.tooltip,
-    });
-  });
+    lines.push(boxSides(left, padded, cols));
+  }
   lines.push(rule(left, innerWidth + 2, cols, false));
   return lines;
 }
@@ -447,9 +614,10 @@ function frameInput(
   left: number,
   innerWidth: number,
   cols: number,
+  prefixText = '>',
 ): { lines: PaintedLine[]; cursorCol?: number } {
   const contentWidth = Math.max(4, innerWidth - 4);
-  const prefix = editable ? '> ' : '';
+  const prefix = editable ? `${prefixText} ` : '';
   const metaText = meta && displayWidth(meta) + displayWidth(prefix) + 4 < contentWidth ? meta : '';
   const room = Math.max(0, contentWidth - displayWidth(prefix) - (metaText ? displayWidth(metaText) + 2 : 0));
   const tail = tailText(text, Math.max(room, editable ? 1 : 0));
@@ -492,58 +660,20 @@ function tailText(text: string, width: number): string {
   return out;
 }
 
-function fileRow(entry: BrowseEntry, selected: boolean, cols: number): { line: PaintedLine; shown: string; link?: LineLink } {
-  const marker = selected ? '> ' : '  ';
-  const name = entryName(entry);
-  const right = entry.name === '..' || !entry.mtime
-    ? ''
-    : `${padLeft(formatSize(entry.size), 8)}  ${formatTime(entry.mtime)}`;
-  const rightWidth = right ? displayWidth(right) + 2 : 0;
-  const nameWidth = Math.max(1, cols - displayWidth(marker) - rightWidth);
-  const shown = truncate(name, nameWidth);
-  const gap = Math.max(0, cols - displayWidth(marker + shown) - displayWidth(right));
-  const line = paintPieces(
-    [
-      { text: marker, tone: 'primary', bold: selected },
-      { text: shown, tone: entry.name.startsWith('.') ? 'muted' : 'text' },
-      { text: ' '.repeat(gap) },
-      { text: right, tone: 'muted' },
-    ],
-    cols,
-    selected,
-  );
-  const kind = entry.kind === 'file' ? 'file' : entry.kind === 'dir' || entry.name === '..' ? 'dir' : entry.kind === 'link' ? 'file' : undefined;
-  if (!kind) return { line, shown };
-  return {
-    line,
-    shown,
-    link: {
-      start: marker.length,
-      length: shown.length,
-      remotePath: entry.path,
-      kind: entry.kind === 'dir' || entry.name === '..' ? 'dir' : 'file',
-      tooltip: entry.kind === 'file' ? `Download ${entry.name}` : `Open ${entry.name}`,
-    },
-  };
-}
-
 const HOME_COMMANDS: { label: string; key: string }[] = [
   { label: 'New connection', key: '/new' },
-  { label: 'Edit selected', key: '/edit' },
-  { label: 'Delete selected', key: '/delete' },
+  { label: 'Edit connection', key: '/edit' },
+  { label: 'Delete connection', key: '/delete' },
   { label: 'Import ~/.ssh/config', key: '/import' },
   { label: 'Quit', key: '/quit' },
 ];
 
 function renderHome(screen: Extract<Screen, { kind: 'connections' }>, view: RenderView): Frame {
   const { cols, rows } = view;
-  const links = new Map<string, LineLink>();
-  const cardWidth = Math.min(72, Math.max(20, cols - 8));
-  const cardLeft = Math.max(0, Math.floor((cols - cardWidth) / 2));
-  const innerWidth = cardWidth - 2;
+  const links = new Map<string, LineLink[]>();
+  const { left, width } = pageColumn(cols);
+  const innerWidth = width - 2;
   const contentWidth = Math.max(8, innerWidth - 4);
-  const promptWidth = Math.min(cols - 2, Math.max(cardWidth, Math.min(cols - 4, cardWidth + 8)));
-  const promptLeft = Math.max(0, Math.floor((cols - promptWidth) / 2));
   const useLogo = contentWidth >= displayWidth(LOGO[0]) + 18;
   const textInset = useLogo ? displayWidth(LOGO[0]) + 2 : 0;
   const column = Math.max(8, contentWidth - textInset);
@@ -596,40 +726,34 @@ function renderHome(screen: Extract<Screen, { kind: 'connections' }>, view: Rend
     return lines;
   };
 
-  const promptBlock = 3;
-  let top = rows >= 36 ? 4 : rows >= 26 ? 2 : 1;
-  let gap = 2;
-  const maxInner = () => Math.max(4, rows - top - gap - promptBlock - 2);
+  const promptTop = rows - PROMPT_BLOCK;
+  const matches = matchSlashCommands(screen.command, slashTargetsFrom(screen.items));
+  const menu = matches.length > 0 ? frameMenu(matches, screen.pick, left, width - 2, cols, promptTop - FRAME_GAP) : undefined;
+  const menuOpen = Boolean(menu && menu.lines.length > 0);
+  const menuTop = menuOpen && menu ? promptTop - FRAME_GAP - menu.lines.length : promptTop;
+  const cardBottom = menuOpen ? menuTop - FRAME_GAP : promptTop - FRAME_GAP;
+  const maxInner = Math.max(1, cardBottom - 2);
   let listLimit = screen.items.length;
   let inner = buildInner(listLimit);
-  while (inner.length > maxInner()) {
+  while (inner.length > maxInner) {
     if (screen.items.length > 0 && listLimit > 1) listLimit -= 1;
-    else if (gap > 1) gap -= 1;
-    else if (top > 0) top -= 1;
     else if (commands.length > 3) commands = commands.slice(0, -1);
     else break;
     inner = buildInner(listLimit);
   }
-  if (inner.length > maxInner()) inner = inner.slice(inner.length - maxInner());
+  if (inner.length > maxInner) inner = inner.slice(0, maxInner);
+  else inner = centerPieces(inner, maxInner);
 
-  const card = frameCard(inner, cardLeft, innerWidth, cols);
-  const prompt = framePrompt(screen.command, view, promptLeft, promptWidth - 2, cols);
+  const card = frameCard(inner, left, innerWidth, cols);
+  const prompt = framePrompt(screen.command, view, left, width - 2, cols);
   const lines = Array.from({ length: rows }, () => blank(cols));
-  const room = Math.max(0, rows - promptBlock - gap);
-  const cardTop = Math.min(top, Math.max(0, room - card.length));
   card.forEach((line, index) => {
-    const row = cardTop + index;
-    if (row >= 0 && row < room) lines[row] = line;
+    if (index < cardBottom && index < rows) lines[index] = line;
   });
-  const promptTop = rows - promptBlock;
   prompt.lines.forEach((line, index) => {
-    lines[promptTop + index] = line;
+    if (promptTop + index < rows) lines[promptTop + index] = line;
   });
-  const matches = matchSlashCommands(screen.command, slashTargetsFrom(screen.items));
-  if (matches.length > 0) {
-    const menuGap = 1;
-    const menu = frameMenu(matches, screen.pick, promptLeft, promptWidth - 2, cols, promptTop - menuGap);
-    const menuTop = promptTop - menuGap - menu.lines.length;
+  if (menuOpen && menu) {
     menu.lines.forEach((line, index) => {
       const row = menuTop + index;
       if (row >= 0 && row < promptTop) lines[row] = line;

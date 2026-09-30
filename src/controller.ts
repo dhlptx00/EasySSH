@@ -170,9 +170,9 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
 
   provideTerminalLinks(context: vscode.TerminalLinkContext): PathLink[] {
     if (!this.app || context.terminal !== this.terminal) return [];
-    const link = this.app.linkFor(context.line);
-    if (!link || link.length <= 0) return [];
-    return [new PathLink(link.start, link.length, link.remotePath, link.tooltip)];
+    return this.app.linkFor(context.line)
+      .filter((link) => link.length > 0)
+      .map((link) => new PathLink(link.start, link.length, link.remotePath, link.tooltip));
   }
 
   handleTerminalLink(link: PathLink): void {

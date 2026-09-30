@@ -47,13 +47,11 @@ describe('connection wizard', () => {
     assert.match(applyStep('port', '70000', withPort, ctx).error ?? '', /65535/);
   });
 
-  it('chooses auth, the remote path, and a jump host', () => {
+  it('chooses auth and a jump host without asking for a directory', () => {
     let draft = emptyDraft();
     draft = applyStep('auth', 'agent', draft, ctx).draft;
     assert.equal(draft.auth, 'agent');
-    assert.equal(nextStep('auth', draft), 'startPathChoice');
-    draft = applyStep('startPathChoice', 'home', draft, ctx).draft;
-    assert.equal(nextStep('startPathChoice', draft), 'jumpChoice');
+    assert.equal(nextStep('auth', draft), 'jumpChoice');
     draft = applyStep('jumpChoice', 'none', draft, ctx).draft;
     assert.equal(nextStep('jumpChoice', draft), 'done');
     assert.equal(draft.jump, '');

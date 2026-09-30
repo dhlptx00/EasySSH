@@ -1,14 +1,16 @@
 import { randomUUID } from 'crypto';
 import { withParent } from '../entries';
 import { HostKeyChangedError, TransferCancelled, humanizeSshError } from '../ssh/errors';
-import { remoteBasename, remoteDirname } from '../remotePath';
-import { safeFileName, shortenPath } from '../text';
+import { remoteBasename } from '../remotePath';
+import { displayWidth, safeFileName, shortenPath } from '../text';
 import type { BrowseEntry, ConnectionRecord, Notice } from '../types';
 import type { AppHost, FileSession } from './host';
 import type { InputEvent } from './input';
 import { defaultSlashPick, matchSlashCommands, parseConnectionCommand, type SlashTarget } from './commands';
+import { sanitizeTerminal } from './ansi';
 import { paint, render, type LineLink } from './render';
 import type { ConnectionItem, Screen } from './screen';
+import { parseRemoteCommand } from './shellCommand';
 import { applyChoice, applyStep, choiceIndex, choiceOptions, draftFromRecord, emptyDraft, nextStep, prevStep, toConnection } from './wizard';
 
 function describe(record: ConnectionRecord): ConnectionItem {
@@ -26,12 +28,20 @@ export class EasySshApp {
   private screen: Screen = { kind: 'loading' };
   private records = new Map<string, ConnectionRecord>();
   private session: FileSession | null = null;
-  private links = new Map<string, LineLink>();
+  private links = new Map<string, LineLink[]>();
+  private linePlains: string[] = [];
+  private trackingMouse = false;
+  private lastOpenPath = '';
+  private lastOpenAt = 0;
   private cols = 80;
   private rows = 24;
   private queue: Promise<void> = Promise.resolve();
   private connectAbort: AbortController | null = null;
   private transferAbort: AbortController | null = null;
+  private commandAbort: AbortController | null = null;
+  private history: string[] = [];
+  private historyAt = -1;
+  private historyDraft = '';
   private trustRecord: ConnectionRecord | null = null;
   private editingId: string | undefined;
   private selectedId: string | undefined;
@@ -55,11 +65,17 @@ export class EasySshApp {
   }
 
   onInput(events: InputEvent[]): void {
+    const queued: InputEvent[] = [];
+    for (const event of events) {
+      if (event.type === 'mouse' && (event.action === 'move' || event.action === 'down')) this.paintPointer(event);
+      else queued.push(event);
+    }
+    if (queued.length === 0) return;
     void this.enqueue(async () => {
-      for (let index = 0; index < events.length; index += 1) {
-        const event = events[index];
+      for (let index = 0; index < queued.length; index += 1) {
+        const event = queued[index];
         if (await this.tryDrop(event)) {
-          const next = events[index + 1];
+          const next = queued[index + 1];
           if (next?.type === 'key' && next.key === 'enter') index += 1;
           continue;
         }
@@ -69,11 +85,20 @@ export class EasySshApp {
   }
 
   activatePath(remotePath: string): void {
-    void this.enqueue(() => this.openRemote(remotePath));
+    void this.enqueue(async () => {
+      await this.flashPress(remotePath);
+      await this.openRemote(remotePath);
+    });
   }
 
-  linkFor(line: string): LineLink | undefined {
-    return this.links.get(line) ?? this.links.get(line.trimEnd());
+  linkFor(line: string): LineLink[] {
+    const found = this.links.get(line) ?? this.links.get(line.trimEnd());
+    if (found) return found;
+    const trimmed = line.trimEnd();
+    for (const [key, value] of this.links) {
+      if (key.trimEnd() === trimmed) return value;
+    }
+    return [];
   }
 
   onRemoteClose(): void {
@@ -93,6 +118,7 @@ export class EasySshApp {
     if (this.drawTimer) clearTimeout(this.drawTimer);
     this.connectAbort?.abort();
     this.transferAbort?.abort();
+    this.commandAbort?.abort();
     this.session?.close();
     this.session = null;
     this.host.setStatus(undefined);
@@ -110,6 +136,10 @@ export class EasySshApp {
   }
 
   private async onEvent(event: InputEvent): Promise<void> {
+    if (event.type === 'mouse') {
+      if (this.screen.kind === 'browse') await this.onBrowsePointer(event);
+      return;
+    }
     if (event.type === 'key' && event.key === 'ctrl-c') {
       await this.cancel();
       return;
@@ -123,6 +153,9 @@ export class EasySshApp {
         return;
       case 'confirm':
         await this.onConfirm(event);
+        return;
+      case 'pick':
+        await this.onPick(event);
         return;
       case 'trust':
         await this.onTrust(event);
@@ -153,14 +186,18 @@ export class EasySshApp {
       await this.showConnections();
       return;
     }
-    if (this.screen.kind === 'confirm' || this.screen.kind === 'trust') {
+    if (this.screen.kind === 'confirm' || this.screen.kind === 'trust' || this.screen.kind === 'pick') {
       this.trustRecord = null;
       await this.showConnections();
       return;
     }
     if (this.screen.kind === 'browse') {
-      if (this.screen.goto !== null) {
-        this.screen = { ...this.screen, goto: null };
+      if (this.commandAbort) {
+        this.commandAbort.abort();
+        return;
+      }
+      if (this.screen.command) {
+        this.screen = { ...this.screen, command: '' };
         this.draw();
         return;
       }
@@ -254,35 +291,10 @@ export class EasySshApp {
         this.screen = { kind: 'wizard', title: 'new connection', draft: emptyDraft(), step: 'name', input: '', pick: 0 };
         this.draw();
         return;
-      case 'edit': {
-        const record = this.currentRecord();
-        if (!record) {
-          this.showNotice('info', screen.items.length === 0 ? 'Type /new to add a connection' : 'Select a connection, then type /edit');
-          return;
-        }
-        const saved = await this.host.secretFlags(record.id);
-        if (this.closed || this.screen.kind !== 'connections') return;
-        this.editingId = record.id;
-        this.screen = {
-          kind: 'wizard',
-          title: `edit ${record.name}`,
-          draft: draftFromRecord(record, saved),
-          step: 'name',
-          input: '',
-          pick: 0,
-        };
-        this.draw();
-        return;
-      }
+      case 'edit':
       case 'delete': {
         if (this.screen.kind !== 'connections') return;
-        const item = this.screen.items[this.screen.selected];
-        if (!item) {
-          this.showNotice('info', 'Type /new to add a connection');
-          return;
-        }
-        this.screen = { kind: 'confirm', item, choice: 0 };
-        this.draw();
+        this.openPicker(action.type, this.screen.items, this.screen.selected);
         return;
       }
       case 'import':
@@ -302,6 +314,68 @@ export class EasySshApp {
         return unreachable;
       }
     }
+  }
+
+  private openPicker(mode: 'edit' | 'delete', items: ConnectionItem[], selected: number): void {
+    if (items.length === 0) {
+      this.showNotice('info', 'Type /new to add a connection');
+      return;
+    }
+    this.screen = {
+      kind: 'pick',
+      mode,
+      items,
+      selected: Math.max(0, Math.min(selected, items.length - 1)),
+    };
+    this.draw();
+  }
+
+  private async onPick(event: InputEvent): Promise<void> {
+    if (this.screen.kind !== 'pick') return;
+    if (event.type === 'key' && (event.key === 'up' || event.key === 'down')) {
+      const selected = move(this.screen.selected, event.key === 'up' ? -1 : 1, this.screen.items.length);
+      this.screen = { ...this.screen, selected };
+      this.draw();
+      return;
+    }
+    if (event.type === 'key' && event.key === 'escape') {
+      await this.showConnections();
+      return;
+    }
+    if (event.type !== 'key' || event.key !== 'enter') return;
+    const item = this.screen.items[this.screen.selected];
+    if (!item) {
+      await this.showConnections();
+      return;
+    }
+    this.selectedId = item.id;
+    if (this.screen.mode === 'delete') {
+      this.screen = { kind: 'confirm', item, choice: 0 };
+      this.draw();
+      return;
+    }
+    await this.openEditor(item.id);
+  }
+
+  private async openEditor(id: string): Promise<void> {
+    const record = this.records.get(id);
+    if (!record) {
+      await this.showConnections({ tone: 'info', text: 'That connection is no longer available' });
+      return;
+    }
+    const saved = await this.host.secretFlags(record.id);
+    if (this.closed || this.screen.kind !== 'pick') return;
+    this.editingId = record.id;
+    this.selectedId = record.id;
+    this.screen = {
+      kind: 'wizard',
+      title: `edit ${record.name}`,
+      draft: draftFromRecord(record, saved),
+      step: 'name',
+      input: '',
+      pick: 0,
+    };
+    this.draw();
   }
 
   private async onConfirm(event: InputEvent): Promise<void> {
@@ -426,69 +500,122 @@ export class EasySshApp {
 
   private async onBrowse(event: InputEvent): Promise<void> {
     if (this.screen.kind !== 'browse') return;
-    if (this.screen.transfer) return;
-    if (this.screen.goto !== null) {
-      await this.onGoto(event);
-      return;
-    }
+    if (this.screen.transfer || this.commandAbort) return;
+    const screen = this.screen;
     if (event.type === 'key' && (event.key === 'up' || event.key === 'down')) {
-      this.screen = {
-        ...this.screen,
-        selected: move(this.screen.selected, event.key === 'up' ? -1 : 1, this.screen.entries.length),
-      };
-      this.draw();
+      this.recallHistory(screen, event.key === 'up' ? -1 : 1);
       return;
     }
-    if (event.type === 'key' && event.key === 'enter') {
-      const entry = this.screen.entries[this.screen.selected];
-      if (entry) await this.openEntry(entry);
-      return;
-    }
-    if (event.type === 'key' && (event.key === 'backspace' || event.key === 'delete')) {
-      if (this.screen.cwd !== '/') await this.changeDir(remoteDirname(this.screen.cwd));
-      return;
-    }
-    if (event.type !== 'text' || event.text.length !== 1) return;
-    const key = event.text.toLowerCase();
-    if (key === 'q') await this.disconnect();
-    else if (key === 'r') await this.reload();
-    else if (key === 'g') {
-      this.screen = { ...this.screen, goto: '' };
-      this.draw();
-    } else if (key === 'u') await this.uploadPicked();
-    else if (key === 'o') await this.pickFolder();
-  }
-
-  private async onGoto(event: InputEvent): Promise<void> {
-    if (this.screen.kind !== 'browse' || this.screen.goto === null) return;
     if (event.type === 'key' && event.key === 'escape') {
-      this.screen = { ...this.screen, goto: null };
+      this.historyAt = -1;
+      this.screen = { ...screen, command: '' };
       this.draw();
       return;
     }
     if (event.type === 'key' && (event.key === 'backspace' || event.key === 'delete')) {
-      this.screen = { ...this.screen, goto: [...this.screen.goto].slice(0, -1).join('') };
+      this.historyAt = -1;
+      this.screen = { ...screen, command: [...screen.command].slice(0, -1).join('') };
+      this.draw();
+      return;
+    }
+    if (event.type === 'key' && event.key === 'ctrl-u') {
+      this.historyAt = -1;
+      this.screen = { ...screen, command: '' };
       this.draw();
       return;
     }
     if (event.type === 'text' || event.type === 'paste') {
-      this.screen = { ...this.screen, goto: this.screen.goto + event.text.replace(/[\r\n]/g, '') };
+      const extra = event.text.replace(/[\r\n]/g, '');
+      if (!extra) return;
+      this.historyAt = -1;
+      this.screen = { ...screen, command: screen.command + extra };
       this.draw();
       return;
     }
     if (event.type !== 'key' || event.key !== 'enter') return;
-    const input = this.screen.goto.trim();
-    this.screen = { ...this.screen, goto: null };
-    if (!input) {
+    const line = screen.command;
+    this.historyAt = -1;
+    this.screen = { ...screen, command: '' };
+    const parsed = parseRemoteCommand(line);
+    if (parsed.type === 'empty') {
       this.draw();
       return;
     }
-    await this.openInput(input);
+    this.history.push(line);
+    this.historyAt = -1;
+    if (parsed.type === 'exit') {
+      await this.disconnect();
+      return;
+    }
+    if (parsed.type === 'cd') {
+      await this.changeDir(parsed.path, line);
+      return;
+    }
+    await this.execRemote(parsed.command, line);
+  }
+
+  private recallHistory(screen: Extract<Screen, { kind: 'browse' }>, delta: number): void {
+    if (this.history.length === 0) return;
+    if (delta < 0) {
+      if (this.historyAt < 0) {
+        this.historyDraft = screen.command;
+        this.historyAt = this.history.length - 1;
+      } else if (this.historyAt > 0) this.historyAt -= 1;
+    } else if (this.historyAt >= 0) {
+      if (this.historyAt >= this.history.length - 1) {
+        this.historyAt = -1;
+        this.screen = { ...screen, command: this.historyDraft };
+        this.draw();
+        return;
+      }
+      this.historyAt += 1;
+    }
+    if (this.historyAt < 0) return;
+    this.screen = { ...screen, command: this.history[this.historyAt] ?? '' };
+    this.draw();
+  }
+
+  private async execRemote(command: string, line: string): Promise<void> {
+    if (!this.session || this.screen.kind !== 'browse') return;
+    const abort = new AbortController();
+    this.commandAbort = abort;
+    const epoch = this.browseEpoch;
+    const cwd = this.screen.cwd;
+    const previous = this.screen.output;
+    this.screen = { ...this.screen, notice: { tone: 'info', text: 'Running…' } };
+    this.draw();
+    try {
+      const columns = Math.max(20, this.cols - 8);
+      const result = await this.session.run(cwd, command, abort.signal, columns);
+      if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
+      const body = sanitizeTerminal(result.output).replace(/\n+$/, '');
+      const block = body ? `$ ${line}\n${body}` : `$ ${line}`;
+      this.screen = {
+        ...this.screen,
+        output: appendTranscript(previous, block),
+        scroll: 0,
+        notice: result.code === 0 ? undefined : { tone: 'error', text: `exit ${result.code}` },
+      };
+      this.draw();
+      await this.refreshEntries();
+    } catch (err) {
+      if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
+      const message = abort.signal.aborted ? 'Command cancelled' : humanizeSshError(err);
+      this.screen = {
+        ...this.screen,
+        output: appendTranscript(previous, message),
+        scroll: 0,
+        notice: { tone: abort.signal.aborted ? 'info' : 'error', text: message },
+      };
+      this.draw();
+    } finally {
+      if (this.commandAbort === abort) this.commandAbort = null;
+    }
   }
 
   private async tryDrop(event: InputEvent): Promise<boolean> {
     if (this.screen.kind !== 'browse' || this.screen.transfer) return false;
-    if (event.type === 'key') return false;
+    if (event.type === 'key' || event.type === 'mouse') return false;
     // Typed input arrives one character at a time. A drop or paste arrives as a whole path.
     if (event.type === 'text' && event.text.length < 2) return false;
     const paths = this.host.classifyDrop(event.text);
@@ -547,7 +674,8 @@ export class EasySshApp {
         cwd: opened.cwd,
         entries,
         selected: 0,
-        goto: null,
+        command: '',
+        output: '',
         notice: notes.length ? { tone: 'info', text: notes.join('. ') } : undefined,
       };
       this.host.setStatus(`${record.name}:${opened.cwd}`);
@@ -583,30 +711,72 @@ export class EasySshApp {
     await this.showConnections();
   }
 
-  private async changeDir(path: string): Promise<void> {
+  private async changeDir(path: string, echo?: string): Promise<void> {
     if (this.screen.kind !== 'browse' || !this.session) return;
     const epoch = this.browseEpoch;
+    const shown = echo?.trim() ? echo.trim() : `cd ${path}`;
     try {
       const resolved = await this.session.resolve(path, this.screen.cwd);
       if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
       if (resolved.kind !== 'dir') {
-        this.showNotice('error', 'Not a directory');
+        this.screen = {
+          ...this.screen,
+          output: appendTranscript(this.screen.output, 'Not a directory'),
+          scroll: 0,
+          notice: { tone: 'error', text: 'Not a directory' },
+        };
+        this.draw();
         return;
       }
       const entries = withParent(resolved.path, await this.session.list(resolved.path));
       if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
-      this.screen = { ...this.screen, cwd: resolved.path, entries, selected: 0, notice: undefined, goto: null };
+      this.screen = {
+        ...this.screen,
+        cwd: resolved.path,
+        entries,
+        selected: 0,
+        notice: undefined,
+        output: appendTranscript(this.screen.output, `$ ${shown}`),
+        scroll: 0,
+        hoverPath: undefined,
+        pressedPath: undefined,
+      };
       this.host.setStatus(`${this.screen.title}:${resolved.path}`);
       this.draw();
     } catch (err) {
-      this.showNotice('error', humanizeSshError(err));
+      if (this.screen.kind !== 'browse') return;
+      const message = humanizeSshError(err);
+      this.screen = {
+        ...this.screen,
+        output: appendTranscript(this.screen.output, message),
+        scroll: 0,
+        notice: { tone: 'error', text: message },
+      };
+      this.draw();
     }
   }
 
   private async openRemote(remotePath: string): Promise<void> {
     if (this.screen.kind !== 'browse') return;
+    const now = Date.now();
+    if (remotePath === this.lastOpenPath && now - this.lastOpenAt < 300) return;
+    this.lastOpenPath = remotePath;
+    this.lastOpenAt = now;
     const entry = this.screen.entries.find((item) => item.path === remotePath);
-    if (!entry) return;
+    if (!entry) {
+      if (!this.session) return;
+      try {
+        const resolved = await this.session.resolve(remotePath, this.screen.cwd);
+        if (resolved.kind === 'dir') {
+          await this.changeDir(resolved.path, `cd ${remotePath}`);
+          return;
+        }
+        if (resolved.kind === 'file') await this.download(remoteBasename(remotePath), resolved.path, 0);
+      } catch (err) {
+        this.showNotice('error', humanizeSshError(err));
+      }
+      return;
+    }
     const index = this.screen.entries.indexOf(entry);
     if (index >= 0) this.screen = { ...this.screen, selected: index };
     await this.openEntry(entry);
@@ -614,7 +784,7 @@ export class EasySshApp {
 
   private async openEntry(entry: BrowseEntry): Promise<void> {
     if (entry.name === '..' || entry.kind === 'dir') {
-      await this.changeDir(entry.path);
+      await this.changeDir(entry.path, `cd ${entry.name}`);
       return;
     }
     if (entry.kind === 'link' || entry.kind === 'other') {
@@ -622,7 +792,7 @@ export class EasySshApp {
       try {
         const resolved = await this.session.resolve(entry.path, this.screen.cwd);
         if (resolved.kind === 'dir') {
-          await this.changeDir(resolved.path);
+          await this.changeDir(resolved.path, `cd ${entry.name}`);
           return;
         }
         if (resolved.kind === 'file') {
@@ -637,15 +807,14 @@ export class EasySshApp {
     if (entry.kind === 'file' || entry.kind === 'link') await this.download(entry.name, entry.path, entry.size);
   }
 
-  private async openInput(input: string): Promise<void> {
-    if (!this.session || this.screen.kind !== 'browse') return;
-    try {
-      const resolved = await this.session.resolve(input, this.screen.cwd);
-      if (resolved.kind === 'dir') await this.changeDir(resolved.path);
-      else if (resolved.kind === 'file') await this.download(remoteBasename(resolved.path), resolved.path, 0);
-      else this.showNotice('error', 'Not a file or directory');
-    } catch (err) {
-      this.showNotice('error', humanizeSshError(err));
+  private async flashPress(remotePath: string): Promise<void> {
+    if (this.screen.kind !== 'browse') return;
+    this.screen = { ...this.screen, pressedPath: remotePath };
+    this.draw();
+    await new Promise((resolve) => setTimeout(resolve, 140));
+    if (this.screen.kind === 'browse' && this.screen.pressedPath === remotePath) {
+      this.screen = { ...this.screen, pressedPath: undefined };
+      this.draw();
     }
   }
 
@@ -675,12 +844,28 @@ export class EasySshApp {
         abort.signal,
       );
       if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
-      this.screen = { ...this.screen, transfer: undefined };
-      this.showNotice('ok', `Downloaded to ${shortenPath(localPath, this.host.home(), 120)}`);
+      const note = `Downloaded to ${localPath}`;
+      this.host.log(note);
+      this.screen = {
+        ...this.screen,
+        transfer: undefined,
+        output: appendTranscript(this.screen.output, note),
+        scroll: 0,
+        notice: { tone: 'ok', text: note },
+      };
+      this.draw();
     } catch (err) {
       if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
-      this.screen = { ...this.screen, transfer: undefined };
-      this.showNotice(abort.signal.aborted ? 'info' : 'error', abort.signal.aborted ? 'Download cancelled' : humanizeSshError(err));
+      const message = abort.signal.aborted ? 'Download cancelled' : humanizeSshError(err);
+      this.host.log(message);
+      this.screen = {
+        ...this.screen,
+        transfer: undefined,
+        output: appendTranscript(this.screen.output, message),
+        scroll: 0,
+        notice: { tone: abort.signal.aborted ? 'info' : 'error', text: message },
+      };
+      this.draw();
     } finally {
       if (this.transferAbort === abort) this.transferAbort = null;
     }
@@ -698,7 +883,6 @@ export class EasySshApp {
     const cwd = this.screen.cwd;
     this.screen = {
       ...this.screen,
-      goto: null,
       transfer: { direction: 'upload', label: paths.length === 1 ? paths[0].split(/[/\\]/).pop() || 'file' : `${paths.length} items`, done: 0, total: 0, index: 1, count: paths.length },
     };
     this.draw();
@@ -718,30 +902,39 @@ export class EasySshApp {
       const text = result.uploaded === 0 && result.skipped === 0
         ? 'Nothing to upload'
         : `Uploaded ${result.uploaded} to ${cwd}${skipped}`;
-      await this.reload({ tone: result.uploaded ? 'ok' : 'info', text });
+      this.screen = {
+        ...this.screen,
+        transfer: undefined,
+        output: appendTranscript(this.screen.output, text),
+        scroll: 0,
+        notice: { tone: result.uploaded ? 'ok' : 'info', text },
+      };
+      this.draw();
+      await this.refreshEntries();
     } catch (err) {
       if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
-      this.screen = { ...this.screen, transfer: undefined };
-      this.showNotice(abort.signal.aborted ? 'info' : 'error', abort.signal.aborted ? 'Upload cancelled' : humanizeSshError(err));
+      const message = abort.signal.aborted ? 'Upload cancelled' : humanizeSshError(err);
+      this.screen = {
+        ...this.screen,
+        transfer: undefined,
+        output: appendTranscript(this.screen.output, message),
+        scroll: 0,
+        notice: { tone: abort.signal.aborted ? 'info' : 'error', text: message },
+      };
+      this.draw();
     } finally {
       if (this.transferAbort === abort) this.transferAbort = null;
     }
   }
 
-  private async uploadPicked(): Promise<void> {
-    const paths = await this.host.chooseUploadFiles();
-    if (paths.length === 0) return;
-    await this.upload(paths);
-  }
-
-  private async reload(notice?: Notice): Promise<void> {
+  private async refreshEntries(notice?: Notice): Promise<void> {
     if (!this.session || this.screen.kind !== 'browse') return;
     const epoch = this.browseEpoch;
     try {
       const entries = withParent(this.screen.cwd, await this.session.list(this.screen.cwd));
       if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
       const selected = Math.min(this.screen.selected, Math.max(0, entries.length - 1));
-      this.screen = { ...this.screen, entries, selected, transfer: undefined, notice, goto: null };
+      this.screen = { ...this.screen, entries, selected, transfer: undefined, notice: notice ?? this.screen.notice };
       this.draw();
     } catch (err) {
       this.showNotice('error', humanizeSshError(err));
@@ -760,7 +953,13 @@ export class EasySshApp {
   }
 
   private showNotice(tone: Notice['tone'], text: string): void {
-    if (this.screen.kind === 'connections' || this.screen.kind === 'browse' || this.screen.kind === 'wizard' || this.screen.kind === 'confirm') {
+    if (
+      this.screen.kind === 'connections' ||
+      this.screen.kind === 'browse' ||
+      this.screen.kind === 'wizard' ||
+      this.screen.kind === 'confirm' ||
+      this.screen.kind === 'pick'
+    ) {
       this.screen = { ...this.screen, notice: { tone, text } };
       this.draw();
     }
@@ -783,8 +982,72 @@ export class EasySshApp {
       clickHint: this.host.clickHint(),
     });
     this.links = frame.links;
+    this.linePlains = frame.lines.map((line) => line.plain);
+    const track = this.screen.kind === 'browse';
+    if (track !== this.trackingMouse) {
+      this.trackingMouse = track;
+      this.emit(track ? '\x1b[?1003h\x1b[?1006h' : '\x1b[?1003l\x1b[?1006l');
+    }
     this.emit(paint(frame));
   }
+
+  /** Hover and mouse-down update the file name immediately. Release is queued. */
+  private paintPointer(event: Extract<InputEvent, { type: 'mouse' }>): void {
+    if (this.screen.kind !== 'browse') return;
+    const link = this.hitLink(event.col, event.row);
+    if (event.action === 'down') {
+      if (!link || event.button !== 0) return;
+      this.screen = { ...this.screen, hoverPath: link.remotePath, pressedPath: link.remotePath };
+      this.draw();
+      return;
+    }
+    const path = link?.remotePath;
+    const pressed = event.button === 0 ? this.screen.pressedPath : undefined;
+    if (this.screen.hoverPath === path && this.screen.pressedPath === pressed) return;
+    this.screen = { ...this.screen, hoverPath: path, pressedPath: pressed };
+    this.draw();
+  }
+
+  private async onBrowsePointer(event: Extract<InputEvent, { type: 'mouse' }>): Promise<void> {
+    if (this.screen.kind !== 'browse') return;
+    if (event.action === 'wheel') {
+      const delta = event.button === 0 ? 3 : -3;
+      const limit = Math.max(0, this.screen.output.split('\n').length);
+      const scroll = Math.max(0, Math.min(limit, (this.screen.scroll ?? 0) + delta));
+      if (scroll === (this.screen.scroll ?? 0)) return;
+      this.screen = { ...this.screen, scroll, hoverPath: undefined };
+      this.draw();
+      return;
+    }
+    if (event.action !== 'up' || event.button !== 0) return;
+    const pressed = this.screen.pressedPath;
+    const link = this.hitLink(event.col, event.row);
+    if (this.screen.pressedPath) {
+      this.screen = { ...this.screen, pressedPath: undefined, hoverPath: link?.remotePath };
+      this.draw();
+    }
+    if (!pressed || link?.remotePath !== pressed) return;
+    if (this.screen.transfer || this.commandAbort) return;
+    await this.openRemote(pressed);
+  }
+
+  private hitLink(col: number, row: number): LineLink | undefined {
+    const plain = this.linePlains[row - 1];
+    if (!plain) return undefined;
+    const list = this.links.get(plain.trimEnd()) ?? this.links.get(plain) ?? [];
+    for (const link of list) {
+      const startCol = displayWidth(plain.slice(0, link.start)) + 1;
+      const endCol = startCol + displayWidth(plain.slice(link.start, link.start + link.length));
+      if (col >= startCol && col < endCol) return link;
+    }
+    return undefined;
+  }
+}
+
+function appendTranscript(current: string, block: string): string {
+  const next = current ? `${current}\n${block}` : block;
+  const limit = 120_000;
+  return next.length <= limit ? next : next.slice(next.length - limit);
 }
 
 function slashTargets(items: ConnectionItem[]): SlashTarget[] {

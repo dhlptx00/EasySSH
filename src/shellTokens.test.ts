@@ -19,5 +19,9 @@ describe('dropped paths', () => {
       classifyDrop('file:///tmp/a.txt', (file) => files.has(file), '/Users/me'),
       ['/tmp/a.txt'],
     );
+    assert.deepEqual(
+      classifyDrop('/tmp/my file.txt', (file) => files.has(file), '/Users/me'),
+      ['/tmp/my file.txt'],
+    );
   });
 });

@@ -60,18 +60,37 @@ function looksLikePath(path: string): boolean {
 
 /**
  * A desktop drop into the terminal arrives as one or more local paths.
- * Returns those paths only when every token is an existing local file or folder.
+ * A single path may contain spaces and may be unquoted. Returns those paths
+ * only when every path is an existing local file or folder.
  */
 export function classifyDrop(input: string, exists: (path: string) => boolean, home: string): string[] | null {
-  const tokens = splitShellTokens(input.trim()).map(fromFileUrl);
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  const whole = existingPath(trimmed, exists, home);
+  if (whole) return [whole];
+  const tokens = splitShellTokens(trimmed).map(fromFileUrl);
   if (tokens.length === 0) return null;
   const paths: string[] = [];
   for (const token of tokens) {
-    const expanded = expandHome(token, home);
-    if (!looksLikePath(expanded) || isFilesystemRoot(expanded) || !exists(expanded)) return null;
-    paths.push(expanded);
+    const found = existingPath(token, exists, home);
+    if (!found) return null;
+    paths.push(found);
   }
   return paths;
+}
+
+function existingPath(token: string, exists: (path: string) => boolean, home: string): string | null {
+  let text = token.trim();
+  if (text.startsWith("$'") && text.endsWith("'") && text.length >= 3) {
+    text = text.slice(2, -1).replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+  }
+  text = fromFileUrl(text);
+  if ((text.startsWith("'") && text.endsWith("'")) || (text.startsWith('"') && text.endsWith('"'))) {
+    text = text.slice(1, -1);
+  }
+  const expanded = expandHome(text, home);
+  if (!looksLikePath(expanded) || isFilesystemRoot(expanded) || !exists(expanded)) return null;
+  return expanded;
 }
 
 function isFilesystemRoot(path: string): boolean {

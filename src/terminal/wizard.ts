@@ -112,13 +112,13 @@ export function nextStep(step: Step, draft: Draft): Step | 'done' {
     case 'auth':
       if (draft.auth === 'password') return 'password';
       if (draft.auth === 'privateKey') return 'keyPath';
-      return 'startPathChoice';
+      return 'jumpChoice';
     case 'password':
-      return 'startPathChoice';
+      return 'jumpChoice';
     case 'keyPath':
       return 'passphrase';
     case 'passphrase':
-      return 'startPathChoice';
+      return 'jumpChoice';
     case 'startPathChoice':
       return draft.startMode === 'custom' ? 'startPath' : 'jumpChoice';
     case 'startPath':
@@ -159,7 +159,9 @@ export function prevStep(step: Step, draft: Draft): Step | 'start' {
     case 'startPath':
       return 'startPathChoice';
     case 'jumpChoice':
-      return draft.startMode === 'custom' ? 'startPath' : 'startPathChoice';
+      if (draft.auth === 'password') return 'password';
+      if (draft.auth === 'privateKey') return 'passphrase';
+      return 'auth';
     case 'jump':
       return 'jumpChoice';
     default: {

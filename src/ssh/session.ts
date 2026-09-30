@@ -38,6 +38,10 @@ interface FreshKey {
   wasNew: boolean;
 }
 
+function shQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 function asCount(value: number | bigint | undefined): number {
   if (typeof value === 'bigint') return Number(value);
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -150,7 +154,7 @@ function callbackOf<T>(run: (done: (err: Error | null | undefined, value: T) => 
   });
 }
 
-async function pipeTransfer(
+export async function pipeTransfer(
   source: Readable,
   destination: Writable,
   total: number,
@@ -166,13 +170,16 @@ async function pipeTransfer(
       if (settled) return;
       settled = true;
       signal.removeEventListener('abort', onAbort);
-      if (err) reject(err);
-      else resolve();
+      if (err) {
+        source.destroy();
+        meter.destroy();
+        destination.destroy();
+        reject(err);
+        return;
+      }
+      resolve();
     };
     const onAbort = () => {
-      source.destroy();
-      meter.destroy();
-      destination.destroy();
       finish(new TransferCancelled());
     };
     signal.addEventListener('abort', onAbort);
@@ -183,7 +190,10 @@ async function pipeTransfer(
     source.on('error', (err) => finish(err));
     meter.on('error', (err) => finish(err));
     destination.on('error', (err) => finish(err));
+    // A normal file emits finish. ssh2's remote write stream destroys itself
+    // inside _final, and current Node then emits close without finish.
     destination.on('finish', () => finish());
+    destination.on('close', () => finish());
     source.pipe(meter).pipe(destination);
   });
 }
@@ -203,17 +213,18 @@ async function collectUploads(
   const directories: string[] = [];
   let skipped = 0;
 
-  const walk = async (local: string, remote: string, label: string) => {
-    const stat = await fs.promises.lstat(local);
-    if (stat.isSymbolicLink()) {
+  const walk = async (local: string, remote: string, label: string, top: boolean) => {
+    const linked = await fs.promises.lstat(local);
+    if (linked.isSymbolicLink() && !top) {
       skipped += 1;
       return;
     }
+    const stat = linked.isSymbolicLink() ? await fs.promises.stat(local) : linked;
     if (stat.isDirectory()) {
       directories.push(remote);
       const children = await fs.promises.readdir(local);
       for (const child of children) {
-        await walk(path.join(local, child), remoteJoin(remote, child), `${label}/${child}`);
+        await walk(path.join(local, child), remoteJoin(remote, child), `${label}/${child}`, false);
       }
       return;
     }
@@ -226,7 +237,7 @@ async function collectUploads(
 
   for (const local of localPaths) {
     const name = path.basename(local);
-    await walk(local, remoteJoin(remoteDir, name), name);
+    await walk(local, remoteJoin(remoteDir, name), name, true);
   }
   if (files.length > 5000) throw new Error('That folder has more than 5000 files. Upload a smaller selection.');
   return { files, directories, skipped };
@@ -313,6 +324,7 @@ export class SshSession {
     });
     const total = asCount(stat.size);
     const partial = `${localPath}.part`;
+    await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
     try {
       if (total === 0) {
         await fs.promises.writeFile(localPath, Buffer.alloc(0));
@@ -361,6 +373,60 @@ export class SshSession {
       );
     }
     return { uploaded: files.length, skipped };
+  }
+
+  /** Run a command in a directory. The command sees that directory as its working directory. */
+  async run(cwd: string, command: string, signal: AbortSignal, columns = 80): Promise<{ code: number; output: string }> {
+    if (signal.aborted) throw new TransferCancelled();
+    const client = this.clients[this.clients.length - 1];
+    if (!client) throw new Error('Not connected');
+    const remote = `sh -c ${shQuote(`cd ${shQuote(cwd)} && ${command}`)}`;
+    const cols = Math.max(20, Math.min(400, Math.floor(columns) || 80));
+    return new Promise((resolve, reject) => {
+      client.exec(remote, { pty: { rows: 40, cols, term: 'xterm-256color' } }, (err, stream) => {
+        if (err || !stream) {
+          reject(err ?? new Error('The server did not run the command'));
+          return;
+        }
+        const chunks: Buffer[] = [];
+        let size = 0;
+        let settled = false;
+        let exitCode: number | null = null;
+        const push = (chunk: Buffer | string) => {
+          if (size > 160_000) return;
+          const data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+          chunks.push(data);
+          size += data.length;
+        };
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener('abort', onAbort);
+          if (signal.aborted) return;
+          resolve({ code: exitCode ?? 0, output: Buffer.concat(chunks).toString('utf8').replace(/\s+$/, '') });
+        };
+        const onAbort = () => {
+          stream.close();
+          signal.removeEventListener('abort', onAbort);
+          if (settled) return;
+          settled = true;
+          reject(new TransferCancelled());
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        stream.on('data', push);
+        stream.stderr.on('data', push);
+        stream.on('exit', (code: number | null) => {
+          if (typeof code === 'number') exitCode = code;
+        });
+        stream.on('error', (error: Error) => {
+          signal.removeEventListener('abort', onAbort);
+          if (settled) return;
+          settled = true;
+          reject(error);
+        });
+        stream.on('close', finish);
+      });
+    });
   }
 
   private async realpath(target: string): Promise<string> {

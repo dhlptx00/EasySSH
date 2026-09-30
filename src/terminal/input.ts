@@ -12,7 +12,11 @@ export type Key =
   | 'ctrl-u'
   | 'delete';
 
-export type InputEvent = { type: 'text'; text: string } | { type: 'paste'; text: string } | { type: 'key'; key: Key };
+export type InputEvent =
+  | { type: 'text'; text: string }
+  | { type: 'paste'; text: string }
+  | { type: 'key'; key: Key }
+  | { type: 'mouse'; action: 'down' | 'up' | 'move' | 'wheel'; button: number; col: number; row: number };
 
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
@@ -29,7 +33,16 @@ function csiKey(final: string, args: string): Key | undefined {
 function isIncomplete(rest: string): boolean {
   if (PASTE_START.startsWith(rest) || PASTE_END.startsWith(rest)) return rest !== PASTE_START && rest !== PASTE_END;
   if (rest === '\x1b' || rest === '\x1b[' || rest === '\x1bO') return true;
+  if (/^\x1b\[<[\d;]*$/.test(rest)) return true;
   return /^\x1b\[[0-9;]*$/.test(rest) || /^\x1bO$/.test(rest);
+}
+
+function mouseEvent(code: number, col: number, row: number, release: boolean): InputEvent {
+  if ((code & 64) !== 0) return { type: 'mouse', action: 'wheel', button: code & 1, col, row };
+  if ((code & 32) !== 0) return { type: 'mouse', action: 'move', button: code & 3, col, row };
+  const button = code & 3;
+  if (release || button === 3) return { type: 'mouse', action: 'up', button: button === 3 ? 0 : button, col, row };
+  return { type: 'mouse', action: 'down', button, col, row };
 }
 
 /**
@@ -133,6 +146,23 @@ export class InputDecoder {
         flush();
         this.pasting = true;
         index += PASTE_START.length;
+        continue;
+      }
+      const mouse = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])/.exec(rest);
+      if (mouse) {
+        flush();
+        events.push(mouseEvent(Number(mouse[1]), Number(mouse[2]), Number(mouse[3]), mouse[4] === 'm'));
+        index += mouse[0].length;
+        continue;
+      }
+      if (rest.startsWith('\x1b[M')) {
+        if (rest.length < 6) {
+          this.pending = rest;
+          break;
+        }
+        flush();
+        events.push(mouseEvent(rest.charCodeAt(3) - 32, rest.charCodeAt(4) - 32, rest.charCodeAt(5) - 32, false));
+        index += 6;
         continue;
       }
       if (isIncomplete(rest)) {

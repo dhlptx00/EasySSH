@@ -15,6 +15,7 @@ export interface FileSession {
     onProgress: (state: TransferState) => void,
     signal: AbortSignal,
   ): Promise<{ uploaded: number; skipped: number }>;
+  run(cwd: string, command: string, signal: AbortSignal, columns?: number): Promise<{ code: number; output: string }>;
   close(): void;
 }
 
