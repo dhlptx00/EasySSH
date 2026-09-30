@@ -1,4 +1,4 @@
-# Only package.json, README, CHANGELOG, LICENSE, media/ and the bundled dist/extension.js ship.
+# Only package.json, README, CHANGELOG, LICENSE, media/ (minus README screenshots) and the bundled dist/extension.js ship.
 # ssh2 is bundled into dist by esbuild, so node_modules is not needed (vsce.dependencies = false).
 node_modules/**
 src/**
@@ -19,3 +19,4 @@ package-lock.json
 **/*.vsix
 **/*.log
 media/icon.svg
+media/readme/**
