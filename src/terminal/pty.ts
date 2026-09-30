@@ -46,7 +46,7 @@ export class EasySshPty implements vscode.Pseudoterminal {
   end(): void {
     if (this.ended) return;
     this.ended = true;
-    this.writeEmitter.fire('\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1049l\x1b[?25h');
+    this.writeEmitter.fire('\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[?1049l\x1b[?25h');
     this.app.dispose();
     this.closeEmitter.fire();
   }

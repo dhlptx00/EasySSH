@@ -10,7 +10,7 @@ Easy SSH talks SSH directly from your computer. It does not install anything on 
 
 ![Demo: pick a connection, open the remote shell, click a directory to cd into it, and click a file to download it](media/readme/connect-and-download.gif)
 
-*Quick demo: connect, click a directory to `cd` into it, click a file to download it.*
+*Quick demo: connect, Ctrl+click (Cmd+click on macOS) a directory to `cd` into it, Ctrl+click a file to download it.*
 
 ## What you can do
 
@@ -20,7 +20,8 @@ Easy SSH talks SSH directly from your computer. It does not install anything on 
 - Import hosts from `~/.ssh/config`
 - Open a remote Linux shell in your home directory
 - Run commands, full-screen programs, and `sudo` the same way you would over `ssh`
-- Click a file name to download it to your Desktop
+- Ctrl+click (Cmd+click on macOS) a file name to download it to your Desktop
+- Select and copy terminal text with the mouse, as in any VS Code terminal
 - Drag a file or folder onto the terminal to upload it into the current directory
 - Open another session from the activity-bar icon or **Easy SSH: New Terminal**
 
@@ -66,21 +67,22 @@ A connection opens your login shell in the home directory, the same kind of shel
 
 *A remote login shell, the same as over `ssh`.*
 
-Click a file name to download it to the Desktop. Click a directory name to `cd` into it. Drag a file or folder onto the terminal to upload it into the current directory. Progress for those transfers is shown in the status bar. `exit` closes the shell and returns to the connection list.
+Ctrl+click (Cmd+click on macOS) a file name to download it to the Desktop. Ctrl+click a directory name to `cd` into it. Hovering a name underlines it and shows what a click does. Drag a file or folder onto the terminal to upload it into the current directory. Progress for those transfers is shown in the status bar. `exit` closes the shell and returns to the connection list.
 
 ![Clicking a directory name runs cd into it](media/readme/08-click-directory-to-cd.png)
 
-*Click a directory name to `cd` into it.*
+*Ctrl+click a directory name to `cd` into it.*
 
 Each click of the activity-bar icon opens another terminal, and so does **Easy SSH: New Terminal**. Each one connects on its own. The first terminal is named Easy SSH, and the next are Easy SSH 2, Easy SSH 3, and so on.
 
-Hold Option on macOS, or Shift on Windows and Linux, and drag to select text.
+Drag with the mouse to select text, then copy it as usual. If you set `editor.multiCursorModifier` to `ctrlCmd`, links open with Alt+click instead, the same as for other VS Code terminal links. To open names with a plain click, turn on **Easy SSH: Plain Click** (`easySsh.plainClick`). In that mode, hold Shift while dragging to select text. On macOS, turn on `terminal.integrated.macOptionClickForcesSelection` and hold Option instead.
 
 | Action | Result |
 | --- | --- |
 | Type, arrows, Tab, Ctrl+R, Ctrl+L | The remote shell handles the keys. Tab finishes a path such as `cd /tm` |
-| Click a file name | Download it to the Desktop |
-| Click a directory name | `cd` into it |
+| Ctrl+click (Cmd+click) a file name | Download it to the Desktop |
+| Ctrl+click (Cmd+click) a directory name | `cd` into it |
+| Drag with the mouse | Select text |
 | Drag a file or folder here | Upload it into the current directory |
 | Ctrl+C | Stop the running command |
 | Ctrl+Z | Suspend the running command (`fg` continues it) |
@@ -91,13 +93,13 @@ Passwords and key passphrases are hidden while you type. Press Enter on a saved 
 
 ## Downloads and uploads
 
-Downloaded files go to your Desktop. Type `/folder` on the connection panel, or run **Easy SSH: Set Download Folder**, to choose another folder. If the file name already exists, Easy SSH adds a number, such as `notes (1).txt`.
+Downloaded files go to your Desktop. On Windows this is the Desktop folder Windows actually uses, including a Desktop redirected to OneDrive or to another drive. The folder in use is written to **Output → Easy SSH** when the extension starts. Type `/folder` on the connection panel, or run **Easy SSH: Set Download Folder**, to choose another folder. If the file name already exists, Easy SSH adds a number, such as `notes (1).txt`.
 
 ![Clicking a file name downloads it to the Desktop](media/readme/09-click-file-to-download.png)
 
-*Click a file name to download it. The status bar shows where it was saved.*
+*Ctrl+click a file name to download it. The status bar shows where it was saved.*
 
-To upload, drag a file or a folder from your desktop onto the Easy SSH terminal. It is written into the current Linux directory. A folder is uploaded with its contents. Symbolic links inside a folder are skipped. A single drop is limited to 5000 files.
+To upload, drag a file or a folder from your desktop onto the Easy SSH terminal. It is written into the current Linux directory of the terminal you drop it on. Each terminal has its own connection and directory, so in a split view a drop goes to the pane under the mouse. A folder is uploaded with its contents. Symbolic links inside a folder are skipped. A single drop is limited to 5000 files.
 
 | Drag onto the terminal | Upload finished |
 | --- | --- |
@@ -121,6 +123,16 @@ The first time you connect, the server's host key is saved. If that key changes 
 
 Passwords and passphrases are stored in the editor's secret storage. Private keys stay in the files you point at.
 
+## Troubleshooting
+
+**I can't select text with the mouse.** Easy SSH does not turn on mouse reporting in the default mode, so a normal drag selects text. A remote program can still ask for mouse input: `vim` with `set mouse=a`, `tmux` with `set -g mouse on`, `htop`, `mc`, and similar full-screen programs. While such a program is running, or when `easySsh.plainClick` is on, hold Shift and drag to select on Windows and Linux. On macOS, turn on `terminal.integrated.macOptionClickForcesSelection`, then hold Option and drag. Easy SSH turns mouse reporting off again when a full-screen program exits and when the shell prompt comes back.
+
+**An upload after `sudo su`, `su`, or `ssh` asks where to put the file.** The prompt of the switched shell does not tell Easy SSH its directory, so Easy SSH cannot know where you are. Instead of guessing, it asks: upload to the last known directory, to your home directory, or to a directory you type. Uploads always go over SFTP as the user you signed in as, not as `root`. To put a file into a directory only root can write, upload it to your home directory, then move it in the terminal, for example `sudo mv ~/file.txt /etc/app/`. Easy SSH shows that command after the upload.
+
+**Upload fails with "Permission denied".** The server refused the write for the signed-in user. The message names the path. Check the directory in the terminal with `ls -ld <directory>` and `touch <directory>/test`. If an existing file with the same name belongs to another user, remove or rename it first. Some servers also make SFTP read-only.
+
+**Where did my download go?** The status bar and **Output → Easy SSH** show the full path. Type `/folder`, or run **Easy SSH: Set Download Folder**, to pick another folder.
+
 ## Develop
 
 ```bash
@@ -133,7 +145,7 @@ Press F5 in VS Code or Cursor. Both hosts use the same extension API, so there i
 
 ## Compared with SSH FS
 
-SSH FS mounts a remote system as a workspace folder and also provides tasks and remote shells. Easy SSH is the connection list and a login shell: type commands the way you would over `ssh`, click a file name to download it, and drop a file or folder to upload it.
+SSH FS mounts a remote system as a workspace folder and also provides tasks and remote shells. Easy SSH is the connection list and a login shell: type commands the way you would over `ssh`, Ctrl+click a file name to download it, and drop a file or folder to upload it.
 
 ## Support
 

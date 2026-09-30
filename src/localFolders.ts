@@ -1,0 +1,140 @@
+import { execFileSync } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { expandHome } from './text';
+
+export interface FolderProbe {
+  platform: NodeJS.Platform;
+  home: string;
+  env: NodeJS.ProcessEnv;
+  exists(file: string): boolean;
+  /** Run a program and return its stdout, or undefined when it fails. */
+  run(file: string, args: string[]): string | undefined;
+  readFile(file: string): string | undefined;
+}
+
+const USER_SHELL_FOLDERS = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders';
+const SHELL_FOLDERS = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders';
+
+/** Expand %VAR% the way Windows does for REG_EXPAND_SZ values. Names are case-insensitive. */
+export function expandWindowsEnv(value: string, env: NodeJS.ProcessEnv): string {
+  const lower = new Map(Object.entries(env).map(([key, item]) => [key.toLowerCase(), item]));
+  return value.replace(/%([^%]+)%/g, (whole, name: string) => lower.get(name.toLowerCase()) ?? whole);
+}
+
+/** The Desktop value from `reg query ... /v Desktop` output. */
+export function parseRegDesktop(output: string | undefined): string | undefined {
+  if (!output) return undefined;
+  const match = /^\s*Desktop\s+REG_(?:EXPAND_)?SZ\s+(.+?)\s*$/im.exec(output);
+  return match?.[1];
+}
+
+/** XDG_DESKTOP_DIR from ~/.config/user-dirs.dirs, e.g. "$HOME/桌面". */
+export function parseXdgDesktop(content: string | undefined, home: string): string | undefined {
+  if (!content) return undefined;
+  const match = /^\s*XDG_DESKTOP_DIR\s*=\s*"([^"]*)"\s*$/m.exec(content);
+  if (!match) return undefined;
+  const value = match[1].replace(/^\$HOME(?=\/|$)/, home).replace(/^\$\{HOME\}(?=\/|$)/, home);
+  if (!value.startsWith('/') || value === home) return undefined;
+  return value;
+}
+
+/**
+ * The user's real Desktop folder.
+ * Windows: the registry value Explorer uses, which follows folder redirection
+ * (for example \\server\share\user\Desktop on a domain) and OneDrive backup;
+ * then PowerShell's known-folder lookup, which also handles non-ASCII paths that
+ * reg.exe prints in the console code page. Linux: XDG user dirs. Otherwise ~/Desktop.
+ * Returns undefined when no Desktop folder exists.
+ */
+export function resolveDesktop(probe: FolderProbe): string | undefined {
+  const candidates: (() => string | undefined)[] = [];
+  if (probe.platform === 'win32') {
+    candidates.push(() => {
+      const raw = parseRegDesktop(probe.run('reg', ['query', USER_SHELL_FOLDERS, '/v', 'Desktop']));
+      return raw ? expandWindowsEnv(raw, probe.env) : undefined;
+    });
+    candidates.push(() => parseRegDesktop(probe.run('reg', ['query', SHELL_FOLDERS, '/v', 'Desktop'])));
+    candidates.push(() => probe.run('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      "[Console]::OutputEncoding=[Text.Encoding]::UTF8; [Environment]::GetFolderPath('Desktop')",
+    ])?.trim() || undefined);
+  } else if (probe.platform === 'linux') {
+    candidates.push(() => parseXdgDesktop(probe.readFile(path.join(probe.home, '.config', 'user-dirs.dirs')), probe.home));
+  }
+  candidates.push(() => path.join(probe.home, 'Desktop'));
+  for (const candidate of candidates) {
+    let found: string | undefined;
+    try {
+      found = candidate();
+    } catch {
+      found = undefined;
+    }
+    if (found && probe.exists(found)) return found;
+  }
+  return undefined;
+}
+
+export function systemProbe(): FolderProbe {
+  return {
+    platform: process.platform,
+    home: os.homedir(),
+    env: process.env,
+    exists: (file) => {
+      try {
+        return fs.existsSync(file);
+      } catch {
+        return false;
+      }
+    },
+    run: (file, args) => {
+      try {
+        return execFileSync(file, args, { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      } catch {
+        return undefined;
+      }
+    },
+    readFile: (file) => {
+      try {
+        return fs.readFileSync(file, 'utf8');
+      } catch {
+        return undefined;
+      }
+    },
+  };
+}
+
+/**
+ * Where downloads go: the configured folder when it exists, then the Desktop,
+ * then Downloads, then the home folder.
+ */
+export function resolveDownloadFolder(
+  configured: string | undefined,
+  desktop: string | undefined,
+  home: string,
+  exists: (file: string) => boolean,
+): string {
+  if (configured && configured.trim()) {
+    const expanded = expandHome(configured.trim(), home);
+    if (exists(expanded)) return expanded;
+  }
+  if (desktop && exists(desktop)) return desktop;
+  const downloads = path.join(home, 'Downloads');
+  if (exists(downloads)) return downloads;
+  return home;
+}
+
+/** Words for the download folder in a link tooltip, e.g. "the Desktop" or "~/Downloads". */
+export function downloadFolderLabel(folder: string, desktop: string | undefined, home: string): string {
+  if (desktop && samePath(folder, desktop)) return 'the Desktop';
+  if (home && (folder.startsWith(home + '/') || folder.startsWith(home + '\\'))) return '~' + folder.slice(home.length);
+  return folder;
+}
+
+function samePath(a: string, b: string): boolean {
+  const clean = (value: string) => value.replace(/[/\\]+$/, '');
+  return process.platform === 'win32' ? clean(a).toLowerCase() === clean(b).toLowerCase() : clean(a) === clean(b);
+}

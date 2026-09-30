@@ -81,7 +81,7 @@ describe('remote tab', () => {
     app.onInput([{ type: 'key', key: 'enter' }]);
     await flush();
     const shown = chunks.join('').replace(/\x1b\[[0-9;]*m/g, '');
-    assert.match(shown, /Click a file name to download/);
+    assert.match(shown, /Ctrl\+click a file name to download/);
     assert.doesNotMatch(shown, /Cmd-click|Select text/);
     for (const ch of 'cd /tm') app.onRawInput(ch);
     app.onRawInput('\t');
