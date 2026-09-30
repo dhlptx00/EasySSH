@@ -265,14 +265,31 @@ interface UploadPlan {
   remote: string;
   label: string;
   size: number;
+  mode: number;
+}
+
+/** Mode for a file the upload creates when the local mode is unknown. */
+export const DEFAULT_FILE_MODE = 0o644;
+/** Mode for a directory the upload creates when the local mode is unknown. */
+export const DEFAULT_DIR_MODE = 0o755;
+
+/**
+ * Permission bits for an uploaded file or directory: the local bits, or the fallback.
+ * ssh2's write stream otherwise chmods every file to 0o666. Windows reports no
+ * real POSIX bits, so it always uses the fallback.
+ */
+export function uploadMode(localMode: number | undefined, fallback: number, platform: NodeJS.Platform = process.platform): number {
+  if (platform === 'win32' || localMode === undefined) return fallback;
+  const bits = localMode & 0o777;
+  return bits === 0 ? fallback : bits;
 }
 
 async function collectUploads(
   localPaths: string[],
   remoteDir: string,
-): Promise<{ files: UploadPlan[]; directories: string[]; skipped: number }> {
+): Promise<{ files: UploadPlan[]; directories: { remote: string; mode: number }[]; skipped: number }> {
   const files: UploadPlan[] = [];
-  const directories: string[] = [];
+  const directories: { remote: string; mode: number }[] = [];
   let skipped = 0;
 
   const walk = async (local: string, remote: string, label: string, top: boolean) => {
@@ -283,7 +300,7 @@ async function collectUploads(
     }
     const stat = linked.isSymbolicLink() ? await fs.promises.stat(local) : linked;
     if (stat.isDirectory()) {
-      directories.push(remote);
+      directories.push({ remote, mode: uploadMode(stat.mode, DEFAULT_DIR_MODE) });
       const children = await fs.promises.readdir(local);
       for (const child of children) {
         await walk(path.join(local, child), remoteJoin(remote, child), `${label}/${child}`, false);
@@ -294,7 +311,7 @@ async function collectUploads(
       skipped += 1;
       return;
     }
-    files.push({ local, remote, label, size: stat.size });
+    files.push({ local, remote, label, size: stat.size, mode: uploadMode(stat.mode, DEFAULT_FILE_MODE) });
   };
 
   for (const local of localPaths) {
@@ -417,13 +434,13 @@ export class SshSession {
     signal: AbortSignal,
   ): Promise<{ uploaded: number; skipped: number }> {
     const { files, directories, skipped } = await collectUploads(localPaths, remoteDir);
-    for (const dir of directories) await this.mkdirp(dir);
+    for (const dir of directories) await this.mkdirp(dir.remote, dir.mode);
     for (let index = 0; index < files.length; index += 1) {
       if (signal.aborted) throw new TransferCancelled();
       const file = files[index];
       await this.mkdirp(remoteDirname(file.remote));
       const source = fs.createReadStream(file.local);
-      const destination = this.sftp.createWriteStream(file.remote);
+      const destination = this.sftp.createWriteStream(file.remote, { mode: file.mode });
       await pipeTransfer(
         source,
         destination,
@@ -506,7 +523,8 @@ export class SshSession {
     return 'other';
   }
 
-  private async mkdirp(dir: string): Promise<void> {
+  /** Create dir and any missing parents. New parents get DEFAULT_DIR_MODE; existing directories are left as they are. */
+  private async mkdirp(dir: string, mode: number = DEFAULT_DIR_MODE): Promise<void> {
     if (!dir || dir === '/' || dir === '.') return;
     const parent = remoteDirname(dir);
     if (parent !== dir) {
@@ -515,7 +533,7 @@ export class SshSession {
     }
     try {
       await callbackOf<void>((done) => {
-        this.sftp.mkdir(dir, (err) => done(err, undefined));
+        this.sftp.mkdir(dir, { mode }, (err) => done(err, undefined));
       });
     } catch (err) {
       const kind = await this.kindOf(dir).catch(() => 'missing' as const);
