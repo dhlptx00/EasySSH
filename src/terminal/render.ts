@@ -49,7 +49,8 @@ const FG: Record<Tone, string> = {
   border: '64;64;64',
 };
 
-const VERSION = '0.1.0';
+// Read from package.json at build time (esbuild inlines it), so the header never goes stale.
+const VERSION: string = (require('../../package.json') as { version: string }).version;
 const PROMPT_BLOCK = 3;
 const FRAME_GAP = 1;
 

@@ -11,6 +11,7 @@
 - A failure to list the directory after an upload no longer hides the "Uploaded" message.
 - Windows: downloads go to the Desktop Windows actually uses, including OneDrive and redirected Desktops, and the hover text names that folder. File names with characters Windows does not allow, or reserved names such as `CON`, are made safe. Saving retries a rename blocked briefly by antivirus or indexing.
 - Windows error codes such as `EPERM`, `EBUSY`, and `ENOENT` are shown as plain sentences.
+- The connection panel header shows the installed version. It showed 0.1.0 in every release so far.
 
 ## 0.1.2
 
