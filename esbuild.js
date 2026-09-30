@@ -1,17 +1,21 @@
 const esbuild = require('esbuild');
 
 const watch = process.argv.includes('--watch');
+const production = process.argv.includes('--production');
 
 /** @type {import('esbuild').BuildOptions} */
 const options = {
   entryPoints: ['src/extension.ts'],
   bundle: true,
   outfile: 'dist/extension.js',
-  external: ['vscode', 'ssh2'],
+  // ssh2 is bundled. Its optional native add-ons are loaded inside try/catch and
+  // fall back to pure JavaScript, so they stay external and are not shipped.
+  external: ['vscode', 'cpu-features', '*.node'],
   platform: 'node',
   format: 'cjs',
-  sourcemap: true,
   target: 'node18',
+  minify: production,
+  sourcemap: !production,
   logLevel: 'info',
 };
 

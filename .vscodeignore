@@ -1,15 +1,21 @@
+# Only package.json, README, CHANGELOG, LICENSE, media/ and the bundled dist/extension.js ship.
+# ssh2 is bundled into dist by esbuild, so node_modules is not needed (vsce.dependencies = false).
+node_modules/**
 src/**
 scripts/**
+.vscode/**
+.vscode-test/**
+.github/**
+.git/**
+.gitignore
+.gitattributes
+.DS_Store
 tsconfig.json
 esbuild.js
-**/*.map
+package-lock.json
 **/*.ts
-.git/**
-.github/**
+**/*.map
 **/*.test.js
-node_modules/**
-!node_modules/ssh2/**
-!node_modules/asn1/**
-!node_modules/bcrypt-pbkdf/**
-!node_modules/tweetnacl/**
-!node_modules/safer-buffer/**
+**/*.vsix
+**/*.log
+media/icon.svg
