@@ -247,18 +247,7 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
       },
       downloadFolder: () => this.downloadFolder(),
       home: () => os.homedir(),
-      clickHint: () => process.platform === 'darwin' ? 'cmd-click a file to download' : 'ctrl-click a file to download',
       chooseDownloadFolder: () => this.chooseDownloadFolder(),
-      chooseUploadFiles: async () => {
-        const picked = await vscode.window.showOpenDialog({
-          canSelectFiles: true,
-          canSelectMany: true,
-          canSelectFolders: false,
-          openLabel: 'Upload',
-          defaultUri: vscode.Uri.file(os.homedir()),
-        });
-        return picked?.map((item) => item.fsPath) ?? [];
-      },
       classifyDrop: (text) => classifyDrop(text, (file) => {
         try {
           return fs.existsSync(file);

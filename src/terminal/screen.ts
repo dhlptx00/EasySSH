@@ -1,4 +1,4 @@
-import type { BrowseEntry, Notice, TransferState } from '../types';
+import type { Notice } from '../types';
 import type { Draft, Step } from './wizard';
 
 export interface ConnectionItem {
@@ -25,24 +25,4 @@ export type Screen =
       notice?: Notice;
     }
   | { kind: 'connecting'; label: string }
-  | { kind: 'trust'; hostLabel: string; fingerprint: string; choice: number }
-  | {
-      kind: 'browse';
-      title: string;
-      userHost: string;
-      cwd: string;
-      entries: BrowseEntry[];
-      selected: number;
-      notice?: Notice;
-      transfer?: TransferState;
-      /** The Linux command being typed. */
-      command: string;
-      /** Remote transcript, kept as the server printed it. */
-      output: string;
-      /** Lines hidden below the newest output. 0 follows the tail. */
-      scroll?: number;
-      /** File under the pointer. Its name is underlined. */
-      hoverPath?: string;
-      /** File in the pressed click state. */
-      pressedPath?: string;
-    };
+  | { kind: 'trust'; hostLabel: string; fingerprint: string; choice: number };

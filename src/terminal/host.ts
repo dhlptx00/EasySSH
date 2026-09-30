@@ -15,7 +15,6 @@ export interface FileSession {
     onProgress: (state: TransferState) => void,
     signal: AbortSignal,
   ): Promise<{ uploaded: number; skipped: number }>;
-  run(cwd: string, command: string, signal: AbortSignal, columns?: number): Promise<{ code: number; output: string }>;
   openShell(columns: number, rows: number, onData: (chunk: string) => void, onClose: () => void): Promise<void>;
   writeShell(data: string): void;
   resizeShell(columns: number, rows: number): void;
@@ -44,9 +43,7 @@ export interface AppHost {
   connect(record: ConnectionRecord, options: { acceptChangedKey: boolean; signal: AbortSignal }): Promise<ConnectResult>;
   downloadFolder(): string;
   home(): string;
-  clickHint(): string;
   chooseDownloadFolder(): Promise<string | undefined>;
-  chooseUploadFiles(): Promise<string[]>;
   classifyDrop(text: string): string[] | null;
   localDownloadPath(name: string): string;
   keyExists(path: string): boolean;

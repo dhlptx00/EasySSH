@@ -126,7 +126,6 @@ function connectedHost(written: string[], listed: string[]): AppHost {
     resolve: async () => ({ path: '/root', kind: 'dir' }),
     download: async () => {},
     upload: async () => ({ uploaded: 0, skipped: 0 }),
-    run: async () => ({ code: 0, output: '' }),
     openShell: async () => {
       shell = true;
     },
@@ -148,9 +147,7 @@ function connectedHost(written: string[], listed: string[]): AppHost {
     connect: async () => ({ session, cwd: '/root', trustedNewKey: false, usedFallbackPath: false }),
     downloadFolder: () => '/Users/me/Desktop',
     home: () => '/Users/me',
-    clickHint: () => 'cmd-click a file to download',
     chooseDownloadFolder: async () => undefined,
-    chooseUploadFiles: async () => [],
     classifyDrop: () => null,
     localDownloadPath: (name) => name,
     keyExists: () => true,

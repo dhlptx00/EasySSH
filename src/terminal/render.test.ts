@@ -9,7 +9,6 @@ const view = {
   rows: 24,
   downloadFolder: '/Users/me/Desktop',
   home: '/Users/me',
-  clickHint: 'cmd-click a file to download',
 };
 
 describe('terminal screen', () => {
@@ -108,80 +107,6 @@ describe('terminal screen', () => {
     assert.match(typed.lines[typed.cursor.row].plain, /> 10\.0\.0\.8/);
   });
 
-  it('shows Linux output in a box and links a file name', () => {
-    const file: BrowseEntry = {
-      name: 'README.md',
-      path: '/var/www/README.md',
-      kind: 'file',
-      size: 1200,
-      mtime: Date.parse('2026-09-29T18:10:00'),
-    };
-    const frame = render({
-      kind: 'browse',
-      title: 'prod',
-      userHost: 'root@10.0.0.8:22',
-      cwd: '/var/www',
-      entries: [
-        { name: '..', path: '/var', kind: 'dir', size: 0, mtime: 0 },
-        file,
-        { name: 'secret-list-only', path: '/var/www/secret-list-only', kind: 'file', size: 1, mtime: 0 },
-      ],
-      selected: 1,
-      command: '',
-      output: 'README.md\nnotes',
-    }, view);
-    const text = frame.lines.map((line) => line.plain).join('\n');
-    assert.match(text, /README\.md/);
-    assert.doesNotMatch(text, /secret-list-only/);
-    assert.doesNotMatch(text, /4 KB/);
-    const hintAt = frame.lines.findIndex((line) => line.plain.includes('Click a file'));
-    const outputAt = frame.lines.findIndex((line) => line.plain.includes('README.md'));
-    assert.ok(hintAt > 0 && hintAt < outputAt);
-    assert.match(frame.lines[hintAt - 1].plain, /╭/);
-    assert.ok(frame.lines[hintAt - 1].plain.indexOf('╭') > 0);
-    assert.match(frame.lines[hintAt].plain, /│/);
-    const hint = text.replace(/[│╭╮╰╯─]/g, ' ').replace(/\s+/g, ' ');
-    assert.doesNotMatch(hint, /Select text|Cmd-click/);
-    assert.match(hint, /Click a file name to download it/);
-    assert.match(hint, /Drag a folder here to upload it/);
-    const row = frame.lines[outputAt];
-    const link = frame.links.get(row.plain.trimEnd())?.[0];
-    assert.equal(link?.remotePath, '/var/www/README.md');
-    assert.equal(link?.kind, 'file');
-    assert.equal(row.plain.indexOf('README.md'), link?.start);
-    assert.ok(frame.cursor);
-    assert.match(frame.lines[frame.cursor.row].plain, /\$ /);
-  });
-
-  it('underlines a file name on hover and shows a pressed click', () => {
-    const file: BrowseEntry = {
-      name: 'README.md',
-      path: '/var/www/README.md',
-      kind: 'file',
-      size: 1200,
-      mtime: Date.parse('2026-09-29T18:10:00'),
-    };
-    const base = {
-      kind: 'browse' as const,
-      title: 'prod',
-      userHost: 'root@10.0.0.8:22',
-      cwd: '/var/www',
-      entries: [file],
-      selected: 0,
-      command: '',
-      output: 'README.md',
-    };
-    const hover = render({ ...base, hoverPath: file.path }, view);
-    const hovered = hover.lines.find((line) => line.plain.includes('README.md'));
-    assert.ok(hovered);
-    assert.match(hovered.styled, /\x1b\[4m/);
-    const pressed = render({ ...base, pressedPath: file.path }, view);
-    const row = pressed.lines.find((line) => line.plain.includes('README.md'));
-    assert.ok(row);
-    assert.match(row.styled, /48;2;48;48;48/);
-    assert.match(row.plain, /README\.md/);
-  });
-
   it('lists connections before edit or delete', () => {
     const items = [
       { id: '1', name: 'prod', userHost: 'root@10.0.0.8:22', detail: 'key' },
@@ -229,21 +154,6 @@ describe('terminal screen', () => {
     }, wide);
     assert.ok(wizard.lines[0].plain.trim().startsWith('╭'));
     assert.ok(wizard.lines[0].plain.trim().length >= 150);
-
-    const shell = render({
-      kind: 'browse',
-      title: 'prod',
-      userHost: 'root@10.0.0.8:22',
-      cwd: '/var/www',
-      entries: [],
-      selected: 0,
-      command: '',
-      output: 'README.md',
-    }, wide);
-    const shellBar = shell.lines[0].plain.trim();
-    assert.ok(shellBar.startsWith('╭') && shellBar.length >= 150);
-    assert.ok(shell.cursor);
-    assert.ok(shell.lines[shell.cursor.row - 1].plain.trim().length >= 150);
   });
 
   it('shows the wizard prompt', () => {

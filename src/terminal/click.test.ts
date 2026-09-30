@@ -91,7 +91,6 @@ function host(
       downloads.push(remotePath);
     },
     upload: async () => ({ uploaded: 0, skipped: 0 }),
-    run: async () => ({ code: 0, output: '' }),
     openShell: async (_columns, _rows, onData) => {
       shell = true;
       capture(onData);
@@ -114,9 +113,7 @@ function host(
     connect: async () => ({ session, cwd: '/root', trustedNewKey: false, usedFallbackPath: false }),
     downloadFolder: () => '/Users/me/Desktop',
     home: () => '/Users/me',
-    clickHint: () => 'cmd-click a file to download',
     chooseDownloadFolder: async () => undefined,
-    chooseUploadFiles: async () => [],
     classifyDrop: () => null,
     localDownloadPath: (name) => name,
     keyExists: () => true,

@@ -4,7 +4,7 @@ import { HostKeyChangedError, TransferCancelled, humanizeSshError } from '../ssh
 import { remoteBasename } from '../remotePath';
 import { RawShellTap, type RawShellUpdate } from '../ssh/rawShell';
 import { shellQuote } from '../ssh/shellFeed';
-import { displayWidth, safeFileName, shortenPath } from '../text';
+import { safeFileName, shortenPath } from '../text';
 import type { BrowseEntry, ConnectionRecord, Notice, TransferState } from '../types';
 import type { AppHost, FileSession } from './host';
 import type { InputEvent } from './input';
@@ -16,6 +16,14 @@ import { linkAt, nameSpans, paint, render, sessionHint, type LineLink } from './
 import { Viewport } from './viewport';
 import type { ConnectionItem, Screen } from './screen';
 import { applyChoice, applyStep, choiceIndex, choiceOptions, draftFromRecord, emptyDraft, nextStep, prevStep, toConnection } from './wizard';
+
+/** Connected shell. The login PTY is shown directly; this only tracks the directory. */
+interface RemoteShell {
+  title: string;
+  cwd: string;
+  entries: BrowseEntry[];
+  transfer?: TransferState;
+}
 
 function describe(record: ConnectionRecord): ConnectionItem {
   const auth = record.auth === 'privateKey' ? 'key' : record.auth;
@@ -30,10 +38,10 @@ function describe(record: ConnectionRecord): ConnectionItem {
 
 export class EasySshApp {
   private screen: Screen = { kind: 'loading' };
+  private remote: RemoteShell | null = null;
   private records = new Map<string, ConnectionRecord>();
   private session: FileSession | null = null;
   private links = new Map<string, LineLink[]>();
-  private linePlains: string[] = [];
   private lastOpenPath = '';
   private lastOpenAt = 0;
   private cols = 80;
@@ -51,13 +59,8 @@ export class EasySshApp {
   private pendingRaw = '';
   private rawTimer: ReturnType<typeof setTimeout> | undefined;
   private statusTimer: ReturnType<typeof setTimeout> | undefined;
-  private shellBusy = false;
-  private shellTracksCwd = false;
   private shellClosing = false;
   private shellTimer: ReturnType<typeof setTimeout> | undefined;
-  private history: string[] = [];
-  private historyAt = -1;
-  private historyDraft = '';
   private trustRecord: ConnectionRecord | null = null;
   private editingId: string | undefined;
   private selectedId: string | undefined;
@@ -65,7 +68,6 @@ export class EasySshApp {
   private tabEpoch = 0;
   private readonly inputLine = new InputLine();
   private closed = false;
-  private drawTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly host: AppHost,
@@ -104,37 +106,21 @@ export class EasySshApp {
   }
 
   onInput(events: InputEvent[]): void {
-    const queued: InputEvent[] = [];
-    for (const event of events) {
-      if (event.type === 'mouse' && (event.action === 'move' || event.action === 'down')) this.paintPointer(event);
-      else queued.push(event);
-    }
-    if (queued.length === 0) return;
+    if (events.length === 0) return;
     void this.enqueue(async () => {
-      for (let index = 0; index < queued.length; index += 1) {
-        const event = queued[index];
-        if (await this.tryDrop(event)) {
-          const next = queued[index + 1];
-          if (next?.type === 'key' && next.key === 'enter') index += 1;
-          continue;
-        }
-        await this.onEvent(event);
-      }
+      for (const event of events) await this.onEvent(event);
     });
   }
 
   activatePath(remotePath: string): void {
     if (this.raw && this.remoteAlt) return;
-    void this.enqueue(async () => {
-      if (!this.raw) await this.flashPress(remotePath);
-      await this.openRemote(remotePath);
-    });
+    void this.enqueue(() => this.openRemote(remotePath));
   }
 
   linkFor(line: string): LineLink[] {
     if (this.raw) {
-      if (this.remoteAlt || this.screen.kind !== 'browse') return [];
-      return nameSpans(line, this.screen.entries);
+      if (this.remoteAlt || !this.remote) return [];
+      return nameSpans(line, this.remote.entries);
     }
     const found = this.links.get(line) ?? this.links.get(line.trimEnd());
     if (found) return found;
@@ -148,7 +134,7 @@ export class EasySshApp {
   onRemoteClose(): void {
     void this.enqueue(async () => {
       if (this.closed || this.shellClosing || !this.session) return;
-      if (this.screen.kind !== 'browse' && this.screen.kind !== 'connecting') return;
+      if (!this.remote && this.screen.kind !== 'connecting') return;
       await this.disconnect({ tone: 'error', text: 'The connection closed' });
     });
   }
@@ -158,7 +144,6 @@ export class EasySshApp {
     this.closed = true;
     this.browseEpoch += 1;
     this.shellClosing = true;
-    if (this.drawTimer) clearTimeout(this.drawTimer);
     this.clearShellTimer();
     this.clearRawTimer();
     this.clearStatusTimer();
@@ -166,6 +151,7 @@ export class EasySshApp {
     this.transferAbort?.abort();
     this.session?.close();
     this.session = null;
+    this.remote = null;
     this.host.setStatus(undefined);
   }
 
@@ -181,10 +167,7 @@ export class EasySshApp {
   }
 
   private async onEvent(event: InputEvent): Promise<void> {
-    if (event.type === 'mouse') {
-      if (this.screen.kind === 'browse') await this.onBrowsePointer(event);
-      return;
-    }
+    if (event.type === 'mouse') return;
     if (event.type === 'key' && event.key === 'ctrl-c') {
       await this.cancel();
       return;
@@ -207,9 +190,6 @@ export class EasySshApp {
         return;
       case 'wizard':
         await this.onWizard(event);
-        return;
-      case 'browse':
-        await this.onBrowse(event);
         return;
       default: {
         const unreachable: never = this.screen;
@@ -234,23 +214,6 @@ export class EasySshApp {
     if (this.screen.kind === 'confirm' || this.screen.kind === 'trust' || this.screen.kind === 'pick') {
       this.trustRecord = null;
       await this.showConnections();
-      return;
-    }
-    if (this.screen.kind === 'browse') {
-      if (this.raw) {
-        this.session?.writeShell('\x03');
-        return;
-      }
-      const typed = this.screen.command;
-      if (typed && !this.shellBusy) {
-        this.screen = { ...this.screen, command: '' };
-        this.draw();
-        return;
-      }
-      if (typed) this.screen = { ...this.screen, command: '' };
-      this.session?.writeShell('\x03');
-      this.shellBusy = false;
-      this.draw();
       return;
     }
     if (this.screen.kind === 'connections') {
@@ -547,89 +510,6 @@ export class EasySshApp {
     await this.showConnections({ tone: 'ok', text: `Saved ${record.name}` });
   }
 
-  private async onBrowse(event: InputEvent): Promise<void> {
-    if (this.raw || this.screen.kind !== 'browse') return;
-    if (this.screen.transfer) return;
-    const screen = this.screen;
-    if (event.type === 'key' && (event.key === 'pageup' || event.key === 'pagedown')) {
-      const delta = event.key === 'pageup' ? 8 : -8;
-      const limit = Math.max(0, screen.output.split('\n').length);
-      const scroll = Math.max(0, Math.min(limit, (screen.scroll ?? 0) + delta));
-      if (scroll === (screen.scroll ?? 0)) return;
-      this.screen = { ...screen, scroll };
-      this.draw();
-      return;
-    }
-    if (event.type === 'key' && (event.key === 'up' || event.key === 'down')) {
-      this.recallHistory(screen, event.key === 'up' ? -1 : 1);
-      return;
-    }
-    if (event.type === 'key' && event.key === 'escape') {
-      this.historyAt = -1;
-      this.screen = { ...screen, command: '' };
-      this.draw();
-      return;
-    }
-    if (event.type === 'key' && (event.key === 'backspace' || event.key === 'delete')) {
-      this.historyAt = -1;
-      this.screen = { ...screen, command: [...screen.command].slice(0, -1).join('') };
-      this.draw();
-      return;
-    }
-    if (event.type === 'key' && event.key === 'ctrl-u') {
-      this.historyAt = -1;
-      this.screen = { ...screen, command: '' };
-      this.draw();
-      return;
-    }
-    if (event.type === 'key' && event.key === 'tab') {
-      await this.completeCommand(screen);
-      return;
-    }
-    if (event.type === 'key' && event.key === 'ctrl-d') {
-      if (screen.command) return;
-      this.session?.writeShell('\x04');
-      return;
-    }
-    if (event.type === 'text' || event.type === 'paste') {
-      const extra = event.text.replace(/[\r\n]/g, '');
-      if (!extra) return;
-      this.historyAt = -1;
-      this.screen = { ...screen, command: screen.command + extra };
-      this.draw();
-      return;
-    }
-    if (event.type !== 'key' || event.key !== 'enter') return;
-    const line = screen.command;
-    this.historyAt = -1;
-    if (line.trim()) this.history.push(line);
-    this.screen = { ...screen, command: '' };
-    if (this.shellTracksCwd) this.shellBusy = true;
-    this.session?.writeShell(`${line}\n`);
-    this.draw();
-  }
-
-  private recallHistory(screen: Extract<Screen, { kind: 'browse' }>, delta: number): void {
-    if (this.history.length === 0) return;
-    if (delta < 0) {
-      if (this.historyAt < 0) {
-        this.historyDraft = screen.command;
-        this.historyAt = this.history.length - 1;
-      } else if (this.historyAt > 0) this.historyAt -= 1;
-    } else if (this.historyAt >= 0) {
-      if (this.historyAt >= this.history.length - 1) {
-        this.historyAt = -1;
-        this.screen = { ...screen, command: this.historyDraft };
-        this.draw();
-        return;
-      }
-      this.historyAt += 1;
-    }
-    if (this.historyAt < 0) return;
-    this.screen = { ...screen, command: this.history[this.historyAt] ?? '' };
-    this.draw();
-  }
-
   private onShellChunk(chunk: string): void {
     if (this.closed || this.shellClosing || !this.raw) return;
     this.applyShellUpdate(this.tap.push(chunk));
@@ -648,18 +528,16 @@ export class EasySshApp {
       this.inputLine.reset();
       this.present('\x1b[?1000h\x1b[?1006h');
     }
-    if (!update.cwd || this.screen.kind !== 'browse' || update.cwd === this.screen.cwd) return;
-    this.shellTracksCwd = true;
-    this.shellBusy = false;
-    this.screen = { ...this.screen, cwd: update.cwd };
-    this.host.setStatus(`${this.screen.title}:${update.cwd}`);
+    if (!update.cwd || !this.remote || update.cwd === this.remote.cwd) return;
+    this.remote = { ...this.remote, cwd: update.cwd };
+    this.host.setStatus(`${this.remote.title}:${update.cwd}`);
     const cwd = update.cwd;
     void this.enqueue(() => this.refreshListing(cwd));
   }
 
   private onShellClosed(): void {
     void this.enqueue(async () => {
-      if (this.shellClosing || this.closed || this.screen.kind !== 'browse') return;
+      if (this.shellClosing || this.closed || !this.remote) return;
       await this.disconnect();
     });
   }
@@ -670,7 +548,6 @@ export class EasySshApp {
     this.shellTimer = setTimeout(() => {
       this.shellTimer = undefined;
       if (epoch !== this.browseEpoch || this.tap.ready || !this.raw || this.closed) return;
-      this.shellBusy = false;
       this.applyShellUpdate(this.tap.release());
     }, 1200);
   }
@@ -742,7 +619,7 @@ export class EasySshApp {
   }
 
   private forwardPiece(piece: RawInputPiece): void {
-    if (!this.session?.hasShell() || this.screen.kind !== 'browse') return;
+    if (!this.session?.hasShell() || !this.remote) return;
     if (piece.kind === 'paste') {
       this.inputLine.forget();
       this.writeOrUpload(piece.text, encodePaste(piece.text, this.remotePaste), false);
@@ -777,14 +654,14 @@ export class EasySshApp {
       this.pointerDown = { col: event.col, row: event.row };
       return;
     }
-    if (event.action !== 'up' || event.button !== 0 || this.screen.kind !== 'browse') {
+    if (event.action !== 'up' || event.button !== 0 || !this.remote) {
       this.pointerDown = undefined;
       return;
     }
     const down = this.pointerDown;
     this.pointerDown = undefined;
     if (!down || down.col !== event.col || down.row !== event.row) return;
-    const link = linkAt(this.viewport.cells(event.row), event.col - 1, this.screen.entries);
+    const link = linkAt(this.viewport.cells(event.row), event.col - 1, this.remote.entries);
     if (link) this.activatePath(link.remotePath);
   }
 
@@ -793,7 +670,7 @@ export class EasySshApp {
     const drop = this.asDrop(tracked);
     if (drop) {
       this.inputLine.forget();
-      if (this.screen.kind === 'browse' && this.screen.transfer) this.showNotice('error', 'Wait for the current transfer to finish');
+      if (this.remote?.transfer) this.showNotice('error', 'Wait for the current transfer to finish');
       else void this.enqueue(() => this.upload(drop));
       return;
     }
@@ -808,7 +685,7 @@ export class EasySshApp {
   private completeTab(): void {
     const session = this.session;
     const line = this.inputLine.text();
-    const cwd = this.screen.kind === 'browse' ? this.screen.cwd : '';
+    const cwd = this.remote?.cwd ?? '';
     const query = session && line !== null && !this.remoteAlt ? completionQuery(line, cwd) : null;
     if (!session || !query || line === null) {
       this.inputLine.forget();
@@ -850,27 +727,8 @@ export class EasySshApp {
       && !this.closed
       && !this.remoteAlt
       && this.session === session
-      && this.screen.kind === 'browse'
+      && this.remote !== null
       && this.inputLine.text() === snapshot;
-  }
-
-  private async completeCommand(screen: Extract<Screen, { kind: 'browse' }>): Promise<void> {
-    const query = completionQuery(screen.command, screen.cwd);
-    if (!query || !this.session) return;
-    const epoch = ++this.tabEpoch;
-    const session = this.session;
-    let suffix: string | null = null;
-    try {
-      suffix = completionSuffix(query.prefix, await session.list(query.dir), query.dirsOnly);
-    } catch (err) {
-      this.host.log(err instanceof Error ? err.message : String(err));
-      return;
-    }
-    if (epoch !== this.tabEpoch || this.raw || this.screen.kind !== 'browse' || this.screen.command !== screen.command) return;
-    if (!suffix) return;
-    this.historyAt = -1;
-    this.screen = { ...this.screen, command: screen.command + suffix };
-    this.draw();
   }
 
   private writeShell(data: string): void {
@@ -882,7 +740,7 @@ export class EasySshApp {
   }
 
   private asDrop(text: string): string[] | null {
-    if (this.screen.kind !== 'browse' || text.length < 2) return null;
+    if (!this.remote || text.length < 2) return null;
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text)) return null;
     return this.host.classifyDrop(text);
   }
@@ -891,17 +749,6 @@ export class EasySshApp {
     if (!this.rawTimer) return;
     clearTimeout(this.rawTimer);
     this.rawTimer = undefined;
-  }
-
-  private async tryDrop(event: InputEvent): Promise<boolean> {
-    if (this.screen.kind !== 'browse' || this.screen.transfer) return false;
-    if (event.type === 'key' || event.type === 'mouse') return false;
-    // Typed input arrives one character at a time. A drop or paste arrives as a whole path.
-    if (event.type === 'text' && event.text.length < 2) return false;
-    const paths = this.host.classifyDrop(event.text);
-    if (!paths) return false;
-    await this.upload(paths);
-    return true;
   }
 
   private setCommand(screen: Extract<Screen, { kind: 'connections' }>, command: string, notice: Notice | undefined): void {
@@ -944,8 +791,6 @@ export class EasySshApp {
       }
       this.session = opened.session;
       this.tap = new RawShellTap();
-      this.shellBusy = true;
-      this.shellTracksCwd = false;
       this.shellClosing = false;
       this.remoteAlt = false;
       this.remotePaste = false;
@@ -953,17 +798,7 @@ export class EasySshApp {
       const notes: string[] = [];
       if (opened.trustedNewKey) notes.push(`Trusted the host key for ${record.host}`);
       if (opened.usedFallbackPath) notes.push('Remote path was not found. Opened your home directory');
-      this.screen = {
-        kind: 'browse',
-        title: record.name,
-        userHost: `${record.username}@${record.host}:${record.port}`,
-        cwd: opened.cwd,
-        entries,
-        selected: 0,
-        command: '',
-        output: '',
-        notice: notes.length ? { tone: 'info', text: notes.join('. ') } : undefined,
-      };
+      this.remote = { title: record.name, cwd: opened.cwd, entries };
       this.host.setStatus(`${record.name}:${opened.cwd}`);
       this.enterRaw(notes);
       try {
@@ -1010,88 +845,31 @@ export class EasySshApp {
     this.transferAbort?.abort();
     const session = this.session;
     this.session = null;
+    this.remote = null;
     session?.close();
     this.leaveRaw();
     await this.showConnections(notice);
   }
 
-  private async enterDirectory(path: string): Promise<void> {
-    if (this.screen.kind !== 'browse' || !this.session) return;
-    if (this.raw) {
-      this.session.writeShell(`cd ${shellQuote(path)}\n`);
-      return;
-    }
-    if (this.shellBusy) {
-      this.showNotice('info', 'Wait for the command to finish');
-      return;
-    }
-    if (!this.session.hasShell() || !this.shellTracksCwd) {
-      await this.changeDir(path);
-      this.session?.writeShell(`cd ${shellQuote(path)}\n`);
-      return;
-    }
-    this.shellBusy = true;
+  private enterDirectory(path: string): void {
+    if (!this.remote || !this.session) return;
     this.session.writeShell(`cd ${shellQuote(path)}\n`);
   }
 
-  private async changeDir(path: string, echo?: string): Promise<void> {
-    if (this.screen.kind !== 'browse' || !this.session) return;
-    const epoch = this.browseEpoch;
-    const shown = echo?.trim() ? echo.trim() : `cd ${path}`;
-    try {
-      const resolved = await this.session.resolve(path, this.screen.cwd);
-      if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
-      if (resolved.kind !== 'dir') {
-        this.screen = {
-          ...this.screen,
-          output: appendTranscript(this.screen.output, 'Not a directory'),
-          scroll: 0,
-          notice: { tone: 'error', text: 'Not a directory' },
-        };
-        this.draw();
-        return;
-      }
-      const entries = withParent(resolved.path, await this.session.list(resolved.path));
-      if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
-      this.screen = {
-        ...this.screen,
-        cwd: resolved.path,
-        entries,
-        selected: 0,
-        notice: undefined,
-        output: appendTranscript(this.screen.output, `$ ${shown}`),
-        scroll: 0,
-        hoverPath: undefined,
-        pressedPath: undefined,
-      };
-      this.host.setStatus(`${this.screen.title}:${resolved.path}`);
-      this.draw();
-    } catch (err) {
-      if (this.screen.kind !== 'browse') return;
-      const message = humanizeSshError(err);
-      this.screen = {
-        ...this.screen,
-        output: appendTranscript(this.screen.output, message),
-        scroll: 0,
-        notice: { tone: 'error', text: message },
-      };
-      this.draw();
-    }
-  }
-
   private async openRemote(remotePath: string): Promise<void> {
-    if (this.screen.kind !== 'browse') return;
+    const remote = this.remote;
+    if (!remote) return;
     const now = Date.now();
     if (remotePath === this.lastOpenPath && now - this.lastOpenAt < 300) return;
     this.lastOpenPath = remotePath;
     this.lastOpenAt = now;
-    const entry = this.screen.entries.find((item) => item.path === remotePath);
+    const entry = remote.entries.find((item) => item.path === remotePath);
     if (!entry) {
       if (!this.session) return;
       try {
-        const resolved = await this.session.resolve(remotePath, this.screen.cwd);
+        const resolved = await this.session.resolve(remotePath, remote.cwd);
         if (resolved.kind === 'dir') {
-          await this.enterDirectory(resolved.path);
+          this.enterDirectory(resolved.path);
           return;
         }
         if (resolved.kind === 'file') await this.download(remoteBasename(remotePath), resolved.path, 0);
@@ -1100,22 +878,22 @@ export class EasySshApp {
       }
       return;
     }
-    const index = this.screen.entries.indexOf(entry);
-    if (index >= 0) this.screen = { ...this.screen, selected: index };
     await this.openEntry(entry);
   }
 
   private async openEntry(entry: BrowseEntry): Promise<void> {
+    const remote = this.remote;
+    if (!remote) return;
     if (entry.name === '..' || entry.kind === 'dir') {
-      await this.enterDirectory(entry.path);
+      this.enterDirectory(entry.path);
       return;
     }
     if (entry.kind === 'link' || entry.kind === 'other') {
-      if (!this.session || this.screen.kind !== 'browse') return;
+      if (!this.session) return;
       try {
-        const resolved = await this.session.resolve(entry.path, this.screen.cwd);
+        const resolved = await this.session.resolve(entry.path, remote.cwd);
         if (resolved.kind === 'dir') {
-          await this.enterDirectory(resolved.path);
+          this.enterDirectory(resolved.path);
           return;
         }
         if (resolved.kind === 'file') {
@@ -1130,19 +908,8 @@ export class EasySshApp {
     if (entry.kind === 'file' || entry.kind === 'link') await this.download(entry.name, entry.path, entry.size);
   }
 
-  private async flashPress(remotePath: string): Promise<void> {
-    if (this.screen.kind !== 'browse') return;
-    this.screen = { ...this.screen, pressedPath: remotePath };
-    this.draw();
-    await new Promise((resolve) => setTimeout(resolve, 140));
-    if (this.screen.kind === 'browse' && this.screen.pressedPath === remotePath) {
-      this.screen = { ...this.screen, pressedPath: undefined };
-      this.draw();
-    }
-  }
-
   private async download(name: string, remotePath: string, size: number): Promise<void> {
-    if (!this.session || this.screen.kind !== 'browse' || this.screen.transfer) {
+    if (!this.session || !this.remote || this.remote.transfer) {
       this.showNotice('error', 'Wait for the current transfer to finish');
       return;
     }
@@ -1151,42 +918,30 @@ export class EasySshApp {
     this.transferAbort = abort;
     const epoch = this.browseEpoch;
     const transfer: TransferState = { direction: 'download', label: name, done: 0, total: size, index: 1, count: 1 };
-    this.screen = { ...this.screen, transfer };
+    this.remote = { ...this.remote, transfer };
     this.showTransfer(transfer);
     try {
       await this.session.download(
         remotePath,
         localPath,
         (done, total) => {
-          if (epoch !== this.browseEpoch || this.screen.kind !== 'browse' || !this.screen.transfer) return;
-          const transfer = { ...this.screen.transfer, done, total };
-          this.screen = { ...this.screen, transfer };
-          this.showTransfer(transfer);
+          if (epoch !== this.browseEpoch || !this.remote?.transfer) return;
+          const next = { ...this.remote.transfer, done, total };
+          this.remote = { ...this.remote, transfer: next };
+          this.showTransfer(next);
         },
         abort.signal,
       );
-      if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
+      if (epoch !== this.browseEpoch || !this.remote) return;
       const note = `Downloaded to ${localPath}`;
       this.host.log(note);
-      this.screen = {
-        ...this.screen,
-        transfer: undefined,
-        output: appendTranscript(this.screen.output, note),
-        scroll: 0,
-        notice: { tone: 'ok', text: note },
-      };
+      this.remote = { ...this.remote, transfer: undefined };
       this.finishTransfer(note);
     } catch (err) {
-      if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
+      if (epoch !== this.browseEpoch || !this.remote) return;
       const message = abort.signal.aborted ? 'Download cancelled' : humanizeSshError(err);
       this.host.log(message);
-      this.screen = {
-        ...this.screen,
-        transfer: undefined,
-        output: appendTranscript(this.screen.output, message),
-        scroll: 0,
-        notice: { tone: abort.signal.aborted ? 'info' : 'error', text: message },
-      };
+      this.remote = { ...this.remote, transfer: undefined };
       this.finishTransfer(message);
     } finally {
       if (this.transferAbort === abort) this.transferAbort = null;
@@ -1194,15 +949,15 @@ export class EasySshApp {
   }
 
   private async upload(paths: string[]): Promise<void> {
-    if (!this.session || this.screen.kind !== 'browse') return;
-    if (this.screen.transfer) {
+    if (!this.session || !this.remote) return;
+    if (this.remote.transfer) {
       this.showNotice('error', 'Wait for the current transfer to finish');
       return;
     }
     const abort = new AbortController();
     this.transferAbort = abort;
     const epoch = this.browseEpoch;
-    const cwd = this.screen.cwd;
+    const cwd = this.remote.cwd;
     const transfer: TransferState = {
       direction: 'upload',
       label: paths.length === 1 ? paths[0].split(/[/\\]/).pop() || 'file' : `${paths.length} items`,
@@ -1211,43 +966,31 @@ export class EasySshApp {
       index: 1,
       count: paths.length,
     };
-    this.screen = { ...this.screen, transfer };
+    this.remote = { ...this.remote, transfer };
     this.showTransfer(transfer);
     try {
       const result = await this.session.upload(
         paths,
         cwd,
         (state) => {
-          if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
-          this.screen = { ...this.screen, transfer: state };
+          if (epoch !== this.browseEpoch || !this.remote) return;
+          this.remote = { ...this.remote, transfer: state };
           this.showTransfer(state);
         },
         abort.signal,
       );
-      if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
+      if (epoch !== this.browseEpoch || !this.remote) return;
       const skipped = result.skipped ? `, skipped ${result.skipped}` : '';
       const text = result.uploaded === 0 && result.skipped === 0
         ? 'Nothing to upload'
         : `Uploaded ${result.uploaded} to ${cwd}${skipped}`;
-      this.screen = {
-        ...this.screen,
-        transfer: undefined,
-        output: appendTranscript(this.screen.output, text),
-        scroll: 0,
-        notice: { tone: result.uploaded ? 'ok' : 'info', text },
-      };
+      this.remote = { ...this.remote, transfer: undefined };
       this.finishTransfer(text);
       await this.refreshEntries();
     } catch (err) {
-      if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
+      if (epoch !== this.browseEpoch || !this.remote) return;
       const message = abort.signal.aborted ? 'Upload cancelled' : humanizeSshError(err);
-      this.screen = {
-        ...this.screen,
-        transfer: undefined,
-        output: appendTranscript(this.screen.output, message),
-        scroll: 0,
-        notice: { tone: abort.signal.aborted ? 'info' : 'error', text: message },
-      };
+      this.remote = { ...this.remote, transfer: undefined };
       this.finishTransfer(message);
     } finally {
       if (this.transferAbort === abort) this.transferAbort = null;
@@ -1255,28 +998,26 @@ export class EasySshApp {
   }
 
   private async refreshListing(cwd: string): Promise<void> {
-    if (!this.session || this.screen.kind !== 'browse') return;
+    if (!this.session || !this.remote) return;
     const epoch = this.browseEpoch;
     try {
       const entries = withParent(cwd, await this.session.list(cwd));
-      if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
-      this.screen = { ...this.screen, cwd, entries, hoverPath: undefined, pressedPath: undefined };
-      this.host.setStatus(`${this.screen.title}:${cwd}`);
-      if (!this.raw) this.draw();
+      if (epoch !== this.browseEpoch || !this.remote) return;
+      this.remote = { ...this.remote, cwd, entries };
+      this.host.setStatus(`${this.remote.title}:${cwd}`);
     } catch {
       // The shell can be in a directory SFTP is not allowed to read. Keep the previous list.
     }
   }
 
-  private async refreshEntries(notice?: Notice): Promise<void> {
-    if (!this.session || this.screen.kind !== 'browse') return;
+  private async refreshEntries(): Promise<void> {
+    if (!this.session || !this.remote) return;
     const epoch = this.browseEpoch;
+    const cwd = this.remote.cwd;
     try {
-      const entries = withParent(this.screen.cwd, await this.session.list(this.screen.cwd));
-      if (epoch !== this.browseEpoch || this.screen.kind !== 'browse') return;
-      const selected = Math.min(this.screen.selected, Math.max(0, entries.length - 1));
-      this.screen = { ...this.screen, entries, selected, transfer: undefined, notice: notice ?? this.screen.notice };
-      this.draw();
+      const entries = withParent(cwd, await this.session.list(cwd));
+      if (epoch !== this.browseEpoch || !this.remote) return;
+      this.remote = { ...this.remote, entries, transfer: undefined };
     } catch (err) {
       this.showNotice('error', humanizeSshError(err));
     }
@@ -1294,10 +1035,6 @@ export class EasySshApp {
   }
 
   private showTransfer(state: TransferState): void {
-    if (!this.raw) {
-      this.draw(false);
-      return;
-    }
     const pct = state.total > 0 ? ` ${Math.min(100, Math.floor((state.done / state.total) * 100))}%` : '';
     const action = state.direction === 'download' ? 'Downloading' : 'Uploading';
     const count = state.count > 1 ? ` (${state.index}/${state.count})` : '';
@@ -1305,17 +1042,16 @@ export class EasySshApp {
   }
 
   private finishTransfer(text: string): void {
-    if (this.raw && this.screen.kind === 'browse') {
-      this.host.setStatus(text);
-      this.clearStatusTimer();
-      const epoch = this.browseEpoch;
-      this.statusTimer = setTimeout(() => {
-        this.statusTimer = undefined;
-        if (this.closed || epoch !== this.browseEpoch || !this.raw || this.screen.kind !== 'browse' || this.screen.transfer) return;
-        this.host.setStatus(`${this.screen.title}:${this.screen.cwd}`);
-      }, 4000);
-    }
-    this.draw();
+    const remote = this.remote;
+    if (!remote) return;
+    this.host.setStatus(text);
+    this.clearStatusTimer();
+    const epoch = this.browseEpoch;
+    this.statusTimer = setTimeout(() => {
+      this.statusTimer = undefined;
+      if (this.closed || epoch !== this.browseEpoch || !this.remote || this.remote.transfer) return;
+      this.host.setStatus(`${this.remote.title}:${this.remote.cwd}`);
+    }, 4000);
   }
 
   private clearStatusTimer(): void {
@@ -1331,7 +1067,6 @@ export class EasySshApp {
     }
     if (
       this.screen.kind === 'connections' ||
-      this.screen.kind === 'browse' ||
       this.screen.kind === 'wizard' ||
       this.screen.kind === 'confirm' ||
       this.screen.kind === 'pick'
@@ -1341,91 +1076,17 @@ export class EasySshApp {
     }
   }
 
-  private draw(immediate = true): void {
-    if (this.raw) {
-      if (this.drawTimer) {
-        clearTimeout(this.drawTimer);
-        this.drawTimer = undefined;
-      }
-      return;
-    }
-    if (!immediate) {
-      if (this.drawTimer) return;
-      this.drawTimer = setTimeout(() => {
-        this.drawTimer = undefined;
-        this.draw(true);
-      }, 80);
-      return;
-    }
+  private draw(): void {
+    if (this.raw) return;
     const frame = render(this.screen, {
       cols: this.cols,
       rows: this.rows,
       downloadFolder: this.host.downloadFolder(),
       home: this.host.home(),
-      clickHint: this.host.clickHint(),
     });
     this.links = frame.links;
-    this.linePlains = frame.lines.map((line) => line.plain);
     this.emit(paint(frame));
   }
-
-  /** Hover and mouse-down update the file name immediately. Release is queued. */
-  private paintPointer(event: Extract<InputEvent, { type: 'mouse' }>): void {
-    if (this.screen.kind !== 'browse') return;
-    const link = this.hitLink(event.col, event.row);
-    if (event.action === 'down') {
-      if (!link || event.button !== 0) return;
-      this.screen = { ...this.screen, hoverPath: link.remotePath, pressedPath: link.remotePath };
-      this.draw();
-      return;
-    }
-    const path = link?.remotePath;
-    const pressed = event.button === 0 ? this.screen.pressedPath : undefined;
-    if (this.screen.hoverPath === path && this.screen.pressedPath === pressed) return;
-    this.screen = { ...this.screen, hoverPath: path, pressedPath: pressed };
-    this.draw();
-  }
-
-  private async onBrowsePointer(event: Extract<InputEvent, { type: 'mouse' }>): Promise<void> {
-    if (this.screen.kind !== 'browse') return;
-    if (event.action === 'wheel') {
-      const delta = event.button === 0 ? 3 : -3;
-      const limit = Math.max(0, this.screen.output.split('\n').length);
-      const scroll = Math.max(0, Math.min(limit, (this.screen.scroll ?? 0) + delta));
-      if (scroll === (this.screen.scroll ?? 0)) return;
-      this.screen = { ...this.screen, scroll, hoverPath: undefined };
-      this.draw();
-      return;
-    }
-    if (event.action !== 'up' || event.button !== 0) return;
-    const pressed = this.screen.pressedPath;
-    const link = this.hitLink(event.col, event.row);
-    if (this.screen.pressedPath) {
-      this.screen = { ...this.screen, pressedPath: undefined, hoverPath: link?.remotePath };
-      this.draw();
-    }
-    if (!pressed || link?.remotePath !== pressed) return;
-    if (this.screen.transfer) return;
-    await this.openRemote(pressed);
-  }
-
-  private hitLink(col: number, row: number): LineLink | undefined {
-    const plain = this.linePlains[row - 1];
-    if (!plain) return undefined;
-    const list = this.links.get(plain.trimEnd()) ?? this.links.get(plain) ?? [];
-    for (const link of list) {
-      const startCol = displayWidth(plain.slice(0, link.start)) + 1;
-      const endCol = startCol + displayWidth(plain.slice(link.start, link.start + link.length));
-      if (col >= startCol && col < endCol) return link;
-    }
-    return undefined;
-  }
-}
-
-function appendTranscript(current: string, block: string, breakBefore = true): string {
-  const next = !current ? block : breakBefore ? `${current}\n${block}` : current + block;
-  const limit = 120_000;
-  return next.length <= limit ? next : next.slice(next.length - limit);
 }
 
 function slashTargets(items: ConnectionItem[]): SlashTarget[] {

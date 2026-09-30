@@ -1,6 +1,5 @@
 import { formatFingerprint, shortenPath, truncate, displayWidth } from '../text';
-import type { BrowseEntry, Notice, TransferState } from '../types';
-import { emphasize, wrapTerminal, type TermLine } from './ansi';
+import type { BrowseEntry, Notice } from '../types';
 import { assignConnectionTokens, matchSlashCommands, type SlashCommand, type SlashTarget } from './commands';
 import type { Screen } from './screen';
 import { choiceOptions, promptFor, stepValue, stepsBefore } from './wizard';
@@ -29,7 +28,6 @@ export interface RenderView {
   rows: number;
   downloadFolder: string;
   home: string;
-  clickHint: string;
 }
 
 type Tone = 'text' | 'muted' | 'primary' | 'green' | 'red' | 'blue' | 'border';
@@ -135,24 +133,6 @@ function windowed<T>(items: T[], selected: number, height: number): T[] {
   return items.slice(start, start + height);
 }
 
-function progressLine(transfer: TransferState, width: number): PaintedLine {
-  const ratio = transfer.total > 0 ? Math.max(0, Math.min(1, transfer.done / transfer.total)) : 0;
-  const percent = transfer.total > 0 ? `${Math.floor(ratio * 100)}%` : '...';
-  const verb = transfer.direction === 'download' ? 'Downloading' : 'Uploading';
-  const count = transfer.count > 1 ? `  ${transfer.index}/${transfer.count}` : '';
-  const label = `${verb} ${transfer.label}  ${percent}${count}`;
-  const barWidth = Math.max(0, Math.min(16, width - displayWidth(label) - 2));
-  const filled = Math.round(barWidth * ratio);
-  const bar = barWidth > 0 ? `  ${'█'.repeat(filled)}${'░'.repeat(barWidth - filled)}` : '';
-  return paintPieces(
-    [
-      { text: truncate(label, width - displayWidth(bar)), tone: 'primary' },
-      { text: bar, tone: 'primary' },
-    ],
-    width,
-  );
-}
-
 export function render(screen: Screen, view: RenderView): Frame {
   const { cols, rows } = view;
   const links = new Map<string, LineLink[]>();
@@ -164,7 +144,6 @@ export function render(screen: Screen, view: RenderView): Frame {
   }
 
   if (screen.kind === 'connections') return renderHome(screen, view);
-  if (screen.kind === 'browse') return renderShell(screen, view);
   return renderPanel(screen, view);
 }
 
@@ -182,7 +161,7 @@ interface PanelInput {
   prefix?: string;
 }
 
-function renderPanel(screen: Exclude<Screen, { kind: 'connections' | 'browse' }>, view: RenderView): Frame {
+function renderPanel(screen: Exclude<Screen, { kind: 'connections' }>, view: RenderView): Frame {
   const links = new Map<string, LineLink[]>();
   const contentWidth = Math.max(8, pageColumn(view.cols).width - 6);
   const budget = frameBudget(view.rows);
@@ -233,10 +212,6 @@ function renderPanel(screen: Exclude<Screen, { kind: 'connections' | 'browse' }>
   return placePanel(content, view, input, anchor, links);
 }
 
-function browseHint(): string {
-  return 'Click a file name to download it. Drag a folder here to upload it.';
-}
-
 /** One quiet line shown above the login shell. */
 export function sessionHint(): { plain: string; styled: string } {
   const gold = '\x1b[38;2;250;178;131m';
@@ -254,165 +229,6 @@ export function sessionHint(): { plain: string; styled: string } {
     plain: parts.map((part) => part.text).join(' '),
     styled: parts.map((part) => `${part.color}${part.text}${reset}`).join(' '),
   };
-}
-
-function shellColumn(cols: number): { left: number; width: number } {
-  return pageColumn(cols);
-}
-
-function renderShell(screen: Extract<Screen, { kind: 'browse' }>, view: RenderView): Frame {
-  const { cols, rows } = view;
-  const links = new Map<string, LineLink[]>();
-  const lines = Array.from({ length: rows }, () => blank(cols));
-  const { left, width } = shellColumn(cols);
-  const promptBlock = 3;
-  const promptTop = rows - promptBlock;
-  const hint = hintFrame(browseHint(), left, width, cols);
-  hint.forEach((line, index) => {
-    if (index < promptTop) lines[index] = line;
-  });
-  const outputTop = Math.min(hint.length + 1, Math.max(0, promptTop - 4));
-  const outputHeight = promptTop - 1 - outputTop;
-  if (outputHeight >= 3) {
-    const box = outputFrame(screen, left, width, cols, outputHeight, links);
-    box.forEach((line, index) => {
-      const row = outputTop + index;
-      if (row >= 0 && row < promptTop) lines[row] = line;
-    });
-  }
-  const editable = !screen.transfer;
-  const prompt = frameInput(
-    editable ? screen.command : 'ctrl+c cancel',
-    editable,
-    editable ? shortenPath(screen.cwd, view.home, 40) : '',
-    left,
-    width - 2,
-    cols,
-    editable ? '$' : '',
-  );
-  prompt.lines.forEach((line, index) => {
-    if (promptTop + index < rows) lines[promptTop + index] = line;
-  });
-  const cursor = editable && prompt.cursorCol !== undefined ? { row: promptTop + 1, col: prompt.cursorCol } : undefined;
-  return { lines, cursor, links };
-}
-
-function hintFrame(text: string, left: number, width: number, cols: number): PaintedLine[] {
-  const innerWidth = Math.max(4, width - 2);
-  const contentWidth = Math.max(4, innerWidth - 4);
-  const wrapped = wrapWords(text, contentWidth);
-  const lines = [rule(left, width, cols, true)];
-  for (const row of wrapped) {
-    const gap = Math.max(0, contentWidth - displayWidth(row));
-    const lead = Math.floor(gap / 2);
-    const content = paintPieces([
-      { text: ' '.repeat(lead) },
-      { text: row, tone: 'muted' },
-      { text: ' '.repeat(gap - lead) },
-    ], contentWidth);
-    const padded = joinPainted([
-      paintPieces([{ text: '  ' }], 2),
-      content,
-      paintPieces([{ text: '  ' }], 2),
-    ], innerWidth);
-    lines.push(boxSides(left, padded, cols));
-  }
-  lines.push(rule(left, width, cols, false));
-  return lines;
-}
-
-function wrapWords(text: string, width: number): string[] {
-  const rows: string[] = [];
-  let current = '';
-  for (const word of text.split(' ')) {
-    const next = current ? `${current} ${word}` : word;
-    if (current && displayWidth(next) > width) {
-      rows.push(current);
-      current = word;
-    } else current = next;
-  }
-  if (current) rows.push(current);
-  return rows.length > 0 ? rows : [''];
-}
-
-function outputFrame(
-  screen: Extract<Screen, { kind: 'browse' }>,
-  left: number,
-  width: number,
-  cols: number,
-  height: number,
-  links: Map<string, LineLink[]>,
-): PaintedLine[] {
-  const innerWidth = Math.max(4, width - 2);
-  const contentWidth = Math.max(4, innerWidth - 2);
-  const inner = Math.max(1, height - 2);
-  const footer = screen.transfer
-    ? progressLine(screen.transfer, contentWidth)
-    : noticeLine(screen.notice, contentWidth);
-  const textRows = footer ? Math.max(0, inner - 1) : inner;
-  const wrapped = screen.output ? wrapTerminal(screen.output, contentWidth) : [];
-  const maxScroll = Math.max(0, wrapped.length - textRows);
-  const scroll = Math.max(0, Math.min(screen.scroll ?? 0, maxScroll));
-  const start = Math.max(0, wrapped.length - textRows - scroll);
-  const visible = wrapped.slice(start, start + textRows);
-  while (visible.length < textRows) visible.push({ plain: '', styled: '\x1b[0m' });
-
-  const lines = [rule(left, width, cols, true)];
-  for (const row of visible) lines.push(outputRow(screen, row, left, contentWidth, innerWidth, cols, links));
-  if (footer) lines.push(plainRow(footer, left, innerWidth, cols));
-  lines.push(rule(left, width, cols, false));
-  return lines;
-}
-
-function outputRow(
-  screen: Extract<Screen, { kind: 'browse' }>,
-  row: TermLine,
-  left: number,
-  contentWidth: number,
-  innerWidth: number,
-  cols: number,
-  links: Map<string, LineLink[]>,
-): PaintedLine {
-  const spans = nameSpans(row.plain, screen.entries);
-  const painted = emphasize(row, spans
-    .filter((span) => span.remotePath === screen.hoverPath || span.remotePath === screen.pressedPath)
-    .map((span) => ({
-      start: span.start,
-      length: span.length,
-      selected: span.remotePath === screen.pressedPath,
-    })));
-  const gap = Math.max(0, contentWidth - displayWidth(painted.plain));
-  const body = painted.styled.endsWith('\x1b[0m') ? painted.styled.slice(0, -4) : painted.styled;
-  const content: PaintedLine = { plain: painted.plain + ' '.repeat(gap), styled: `${body}${' '.repeat(gap)}\x1b[0m` };
-  const padded = joinPainted([
-    paintPieces([{ text: ' ' }], 1),
-    content,
-    paintPieces([{ text: ' ' }], 1),
-  ], innerWidth);
-  const full = boxSides(left, padded, cols);
-  const origin = left + 2;
-  for (const span of spans) {
-    const key = full.plain.trimEnd();
-    const list = links.get(key) ?? [];
-    list.push({
-      start: origin + span.start,
-      length: span.length,
-      remotePath: span.remotePath,
-      kind: span.kind,
-      tooltip: span.tooltip,
-    });
-    links.set(key, list);
-  }
-  return full;
-}
-
-function plainRow(line: PaintedLine, left: number, innerWidth: number, cols: number): PaintedLine {
-  const padded = joinPainted([
-    paintPieces([{ text: ' ' }], 1),
-    line,
-    paintPieces([{ text: ' ' }], 1),
-  ], innerWidth);
-  return boxSides(left, padded, cols);
 }
 
 /** The file or directory under a 0-based screen column. */

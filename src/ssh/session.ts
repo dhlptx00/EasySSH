@@ -104,10 +104,6 @@ export function terminalWindow(columns: number, rows: number): { cols: number; r
   };
 }
 
-function shQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
 function asCount(value: number | bigint | undefined): number {
   if (typeof value === 'bigint') return Number(value);
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -493,60 +489,6 @@ export class SshSession {
   resizeShell(columns: number, rows: number): void {
     const window = terminalWindow(columns, rows);
     this.shell?.setWindow(window.rows, window.cols, 0, 0);
-  }
-
-  /** Run a command in a directory. The command sees that directory as its working directory. */
-  async run(cwd: string, command: string, signal: AbortSignal, columns = 80): Promise<{ code: number; output: string }> {
-    if (signal.aborted) throw new TransferCancelled();
-    const client = this.clients[this.clients.length - 1];
-    if (!client) throw new Error('Not connected');
-    const remote = `sh -c ${shQuote(`cd ${shQuote(cwd)} && ${command}`)}`;
-    const cols = Math.max(20, Math.min(400, Math.floor(columns) || 80));
-    return new Promise((resolve, reject) => {
-      client.exec(remote, { pty: { rows: 40, cols, term: 'xterm-256color' } }, (err, stream) => {
-        if (err || !stream) {
-          reject(err ?? new Error('The server did not run the command'));
-          return;
-        }
-        const chunks: Buffer[] = [];
-        let size = 0;
-        let settled = false;
-        let exitCode: number | null = null;
-        const push = (chunk: Buffer | string) => {
-          if (size > 160_000) return;
-          const data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
-          chunks.push(data);
-          size += data.length;
-        };
-        const finish = () => {
-          if (settled) return;
-          settled = true;
-          signal.removeEventListener('abort', onAbort);
-          if (signal.aborted) return;
-          resolve({ code: exitCode ?? 0, output: Buffer.concat(chunks).toString('utf8').replace(/\s+$/, '') });
-        };
-        const onAbort = () => {
-          stream.close();
-          signal.removeEventListener('abort', onAbort);
-          if (settled) return;
-          settled = true;
-          reject(new TransferCancelled());
-        };
-        signal.addEventListener('abort', onAbort, { once: true });
-        stream.on('data', push);
-        stream.stderr.on('data', push);
-        stream.on('exit', (code: number | null) => {
-          if (typeof code === 'number') exitCode = code;
-        });
-        stream.on('error', (error: Error) => {
-          signal.removeEventListener('abort', onAbort);
-          if (settled) return;
-          settled = true;
-          reject(error);
-        });
-        stream.on('close', finish);
-      });
-    });
   }
 
   private async realpath(target: string): Promise<string> {
