@@ -5,6 +5,15 @@
   "version": "0.1.0",
   "publisher": "easy-ssh",
   "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dhlptx00/EasySSH.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dhlptx00/EasySSH/issues"
+  },
+  "homepage": "https://github.com/dhlptx00/EasySSH#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -94,10 +103,16 @@
     }
   },
   "scripts": {
+    "vscode:prepublish": "npm run check && npm run build",
     "compile": "node esbuild.js",
+    "build": "node esbuild.js --production",
     "watch": "node esbuild.js --watch",
     "check": "tsc --noEmit",
-    "test": "node scripts/test.js"
+    "test": "node scripts/test.js",
+    "package": "npx @vscode/vsce package --no-dependencies"
+  },
+  "vsce": {
+    "dependencies": false
   },
   "dependencies": {
     "ssh2": "^1.17.0"
