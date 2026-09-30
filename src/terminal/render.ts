@@ -233,9 +233,27 @@ function renderPanel(screen: Exclude<Screen, { kind: 'connections' | 'browse' }>
   return placePanel(content, view, input, anchor, links);
 }
 
-function browseHint(clickHint: string): string {
-  const click = clickHint.toLowerCase().startsWith('cmd') ? 'Cmd-click' : 'Ctrl-click';
-  return `${click} a file name to download it to the Desktop. Drag a folder here to upload it into this directory.`;
+function browseHint(): string {
+  return 'Click a file name to download it. Drag a folder here to upload it.';
+}
+
+/** One quiet line shown above the login shell. */
+export function sessionHint(): { plain: string; styled: string } {
+  const gold = '\x1b[38;2;250;178;131m';
+  const dim = '\x1b[38;2;106;106;106m';
+  const reset = '\x1b[0m';
+  const parts = [
+    { text: 'Click', color: gold },
+    { text: 'a file name to download', color: dim },
+    { text: '·', color: dim },
+    { text: 'drag files to upload', color: dim },
+    { text: '·', color: dim },
+    { text: 'exit', color: dim },
+  ];
+  return {
+    plain: parts.map((part) => part.text).join(' '),
+    styled: parts.map((part) => `${part.color}${part.text}${reset}`).join(' '),
+  };
 }
 
 function shellColumn(cols: number): { left: number; width: number } {
@@ -249,7 +267,7 @@ function renderShell(screen: Extract<Screen, { kind: 'browse' }>, view: RenderVi
   const { left, width } = shellColumn(cols);
   const promptBlock = 3;
   const promptTop = rows - promptBlock;
-  const hint = hintFrame(browseHint(view.clickHint), left, width, cols);
+  const hint = hintFrame(browseHint(), left, width, cols);
   hint.forEach((line, index) => {
     if (index < promptTop) lines[index] = line;
   });
@@ -395,6 +413,27 @@ function plainRow(line: PaintedLine, left: number, innerWidth: number, cols: num
     paintPieces([{ text: ' ' }], 1),
   ], innerWidth);
   return boxSides(left, padded, cols);
+}
+
+/** The file or directory under a 0-based screen column. */
+export function linkAt(cells: readonly string[], column: number, entries: BrowseEntry[]): LineLink | undefined {
+  if (column < 0) return undefined;
+  let text = '';
+  const origin: number[] = [];
+  for (let index = 0; index < cells.length; index += 1) {
+    const cell = cells[index];
+    if (!cell) continue;
+    origin.push(index);
+    text += cell;
+  }
+  for (const span of nameSpans(text, entries)) {
+    const start = origin[span.start];
+    if (start === undefined) continue;
+    const endChar = span.start + span.length;
+    const end = endChar < origin.length ? origin[endChar] : cells.length;
+    if (column >= start && column < end) return span;
+  }
+  return undefined;
 }
 
 export function nameSpans(plain: string, entries: BrowseEntry[]): LineLink[] {

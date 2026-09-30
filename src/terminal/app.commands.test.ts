@@ -45,6 +45,7 @@ function host(records: ConnectionRecord[] = [record]): AppHost {
     keyExists: () => true,
     setStatus: () => {},
     log: () => {},
+    scrollTerminal: () => {},
     quit: () => {},
   };
 }

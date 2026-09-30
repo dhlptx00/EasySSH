@@ -80,9 +80,9 @@ describe('remote tab', () => {
     await flush();
     app.onInput([{ type: 'key', key: 'enter' }]);
     await flush();
-    const shown = chunks.join('');
-    assert.match(shown, /Cmd-click a file name to download it to the Desktop/);
-    assert.doesNotMatch(shown, /Select text/);
+    const shown = chunks.join('').replace(/\x1b\[[0-9;]*m/g, '');
+    assert.match(shown, /Click a file name to download/);
+    assert.doesNotMatch(shown, /Cmd-click|Select text/);
     for (const ch of 'cd /tm') app.onRawInput(ch);
     app.onRawInput('\t');
     await flush();
@@ -156,6 +156,7 @@ function connectedHost(written: string[], listed: string[]): AppHost {
     keyExists: () => true,
     setStatus: () => {},
     log: () => {},
+    scrollTerminal: () => {},
     quit: () => {},
   };
 }

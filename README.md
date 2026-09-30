@@ -12,7 +12,7 @@ Easy SSH talks SSH directly from your computer. It does not install anything on 
 - Import hosts from `~/.ssh/config`
 - Open a remote Linux shell in your home directory
 - Run commands, full-screen programs, and `sudo` the same way you would over `ssh`
-- Cmd-click or Ctrl-click a file name to download it to your Desktop
+- Click a file name to download it to your Desktop
 - Drag a file or folder onto the terminal to upload it into the current directory
 - Open another session from the activity-bar icon or **Easy SSH: New Terminal**
 
@@ -39,17 +39,17 @@ On the connection panel, type `/` to open the command list. Connections and syst
 
 A connection opens your login shell in the home directory, the same kind of shell `ssh` starts. The terminal is passed through: what you type goes to the server, and what the server prints is shown as-is. Aliases such as `ll`, functions, and the current directory stay in effect. `vim`, `less`, `top`, and `sudo` work as they do in a normal terminal. The password you type for `sudo` is not echoed. `clear` and `reset` clear the screen. Resizing the panel updates both the width and the height, so `stty size` follows the window.
 
-Cmd-click a file name to download it to the Desktop. On Windows and Linux, use Ctrl-click. Drag a file or folder onto the terminal to upload it into the current directory. Cmd-click or Ctrl-click a directory name to `cd` into it. Progress for those transfers is shown in the status bar. `exit` closes the shell and returns to the connection list.
+Click a file name to download it to the Desktop. Click a directory name to `cd` into it. Drag a file or folder onto the terminal to upload it into the current directory. Progress for those transfers is shown in the status bar. `exit` closes the shell and returns to the connection list.
 
 Each click of the activity-bar icon opens another terminal, and so does **Easy SSH: New Terminal**. Each one connects on its own. The first terminal is named Easy SSH, and the next are Easy SSH 2, Easy SSH 3, and so on.
 
-If a program turns on mouse tracking, hold Option on macOS (Alt on Windows and Linux) while you drag to select text.
+Hold Option on macOS, or Shift on Windows and Linux, and drag to select text.
 
 | Action | Result |
 | --- | --- |
 | Type, arrows, Tab, Ctrl+R, Ctrl+L | The remote shell handles the keys. Tab finishes a path such as `cd /tm` |
-| Cmd-click or Ctrl-click a file name | Download it to the Desktop |
-| Cmd-click or Ctrl-click a directory name | `cd` into it |
+| Click a file name | Download it to the Desktop |
+| Click a directory name | `cd` into it |
 | Drag a file or folder here | Upload it into the current directory |
 | Ctrl+C | Stop the running command |
 | Ctrl+Z | Suspend the running command (`fg` continues it) |
@@ -86,4 +86,4 @@ Press F5 in VS Code or Cursor. Both hosts use the same extension API, so there i
 
 ## Compared with SSH FS
 
-SSH FS mounts a remote system as a workspace folder and also provides tasks and remote shells. Easy SSH is the connection list and a login shell: type commands the way you would over `ssh`, Cmd-click or Ctrl-click a file name to download it, and drop a file or folder to upload it.
+SSH FS mounts a remote system as a workspace folder and also provides tasks and remote shells. Easy SSH is the connection list and a login shell: type commands the way you would over `ssh`, click a file name to download it, and drop a file or folder to upload it.

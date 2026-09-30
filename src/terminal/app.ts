@@ -11,7 +11,9 @@ import type { InputEvent } from './input';
 import { completionQuery, completionSuffix, InputLine } from './complete';
 import { encodePaste, pullRawInput, type RawInputPiece } from './rawInput';
 import { defaultSlashPick, matchSlashCommands, parseConnectionCommand, type SlashTarget } from './commands';
-import { nameSpans, paint, render, type LineLink } from './render';
+import { peelPointer, type PointerEvent } from './pointer';
+import { linkAt, nameSpans, paint, render, sessionHint, type LineLink } from './render';
+import { Viewport } from './viewport';
 import type { ConnectionItem, Screen } from './screen';
 import { applyChoice, applyStep, choiceIndex, choiceOptions, draftFromRecord, emptyDraft, nextStep, prevStep, toConnection } from './wizard';
 
@@ -36,6 +38,8 @@ export class EasySshApp {
   private lastOpenAt = 0;
   private cols = 80;
   private rows = 24;
+  private readonly viewport = new Viewport(80, 24);
+  private pointerDown: { col: number; row: number } | undefined;
   private queue: Promise<void> = Promise.resolve();
   private connectAbort: AbortController | null = null;
   private transferAbort: AbortController | null = null;
@@ -71,6 +75,7 @@ export class EasySshApp {
   setSize(cols: number, rows: number): void {
     this.cols = Math.max(1, cols);
     this.rows = Math.max(1, rows);
+    this.viewport.resize(this.cols, this.rows);
     if (this.raw) {
       this.session?.resizeShell(this.cols, this.rows);
       return;
@@ -637,8 +642,12 @@ export class EasySshApp {
     if (update.altScreen) {
       this.tabEpoch += 1;
       this.inputLine.forget();
-    } else if (wasAlt) this.inputLine.reset();
-    if (update.text) this.emit(update.text);
+    }
+    if (update.text) this.present(update.text);
+    if (wasAlt && !update.altScreen) {
+      this.inputLine.reset();
+      this.present('\x1b[?1000h\x1b[?1006h');
+    }
     if (!update.cwd || this.screen.kind !== 'browse' || update.cwd === this.screen.cwd) return;
     this.shellTracksCwd = true;
     this.shellBusy = false;
@@ -677,10 +686,16 @@ export class EasySshApp {
     this.rawBuffer = '';
     this.tabEpoch += 1;
     this.inputLine.reset();
-    const click = this.host.clickHint().toLowerCase().startsWith('cmd') ? 'Cmd-click' : 'Ctrl-click';
-    const hint = `${click} a file name to download it to the Desktop. Drag files here to upload. Type exit to disconnect.`;
-    const lines = [...notes, hint].join('\r\n');
-    this.emit(`\x1b[?1049l\x1b[?25h\x1b[0m\x1b[2J\x1b[3J\x1b[H\x1b[2m${lines}\x1b[0m\r\n`);
+    const dim = '\x1b[38;2;106;106;106m';
+    const hint = sessionHint();
+    const lines = [...notes.map((note) => `${dim}${note}\x1b[0m`), hint.styled].join('\r\n');
+    this.present(`\x1b[?1049l\x1b[?25h\x1b[0m\x1b[2J\x1b[3J\x1b[H${lines}\r\n\x1b[?1000h\x1b[?1006h`);
+  }
+
+  /** Show bytes in the terminal and keep a copy for click hit-testing. */
+  private present(data: string): void {
+    if (this.raw) this.viewport.write(data);
+    this.emit(data);
   }
 
   private leaveRaw(): void {
@@ -689,6 +704,7 @@ export class EasySshApp {
     this.inputLine.reset();
     this.rawBuffer = '';
     this.pendingRaw = '';
+    this.pointerDown = undefined;
     if (!this.raw) return;
     this.raw = false;
     this.remoteAlt = false;
@@ -706,8 +722,10 @@ export class EasySshApp {
   private queueRaw(data: string): void {
     this.rawBuffer += data;
     this.clearRawTimer();
-    const pulled = pullRawInput(this.rawBuffer);
-    this.rawBuffer = pulled.rest;
+    const peeled = peelPointer(this.rawBuffer);
+    for (const event of peeled.events) this.onLocalPointer(event);
+    const pulled = pullRawInput(peeled.text);
+    this.rawBuffer = peeled.held + pulled.rest;
     for (const piece of pulled.pieces) this.forwardPiece(piece);
     if (!this.rawBuffer) return;
     const openPaste = this.rawBuffer.startsWith('\x1b[200~');
@@ -716,6 +734,8 @@ export class EasySshApp {
       if (!this.raw || !this.rawBuffer) return;
       const pending = this.rawBuffer;
       this.rawBuffer = '';
+      // A trailing mouse report never became a click. Drop it instead of typing it.
+      if (pending.startsWith('\x1b[<')) return;
       if (pending.startsWith('\x1b[200~')) this.forwardPiece({ kind: 'paste', text: pending.slice('\x1b[200~'.length) });
       else this.forwardPiece({ kind: 'bytes', text: pending });
     }, openPaste ? 2000 : 25);
@@ -742,6 +762,30 @@ export class EasySshApp {
       this.completeTab();
       index = tab + 1;
     }
+  }
+
+  private onLocalPointer(event: PointerEvent): void {
+    if (this.remoteAlt) {
+      this.writeShell(event.raw);
+      return;
+    }
+    if (event.action === 'wheel') {
+      this.host.scrollTerminal(event.button === 0 ? 'up' : 'down');
+      return;
+    }
+    if (event.action === 'down' && event.button === 0) {
+      this.pointerDown = { col: event.col, row: event.row };
+      return;
+    }
+    if (event.action !== 'up' || event.button !== 0 || this.screen.kind !== 'browse') {
+      this.pointerDown = undefined;
+      return;
+    }
+    const down = this.pointerDown;
+    this.pointerDown = undefined;
+    if (!down || down.col !== event.col || down.row !== event.row) return;
+    const link = linkAt(this.viewport.cells(event.row), event.col - 1, this.screen.entries);
+    if (link) this.activatePath(link.remotePath);
   }
 
   /** Send a typed chunk, or upload it when it is a local file drop. */

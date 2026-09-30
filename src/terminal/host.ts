@@ -52,5 +52,7 @@ export interface AppHost {
   keyExists(path: string): boolean;
   setStatus(text: string | undefined): void;
   log(line: string): void;
+  /** Scroll the terminal view when a click-to-download session receives the wheel. */
+  scrollTerminal(direction: 'up' | 'down'): void;
   quit(): void;
 }

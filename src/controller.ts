@@ -274,6 +274,10 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
           return false;
         }
       },
+      scrollTerminal: (direction) => {
+        const command = direction === 'up' ? 'workbench.action.terminal.scrollUp' : 'workbench.action.terminal.scrollDown';
+        void vscode.commands.executeCommand(command);
+      },
       setStatus: (text) => {
         const live = this.lives.find((item) => item.app === app());
         if (live) live.status = text;
