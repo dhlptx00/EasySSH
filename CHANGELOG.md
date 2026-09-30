@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- Add Buy Me a Coffee sponsor link.
+
 ## 0.1.1
 
 - Add screenshots, a demo GIF, and an infographic to the README.
