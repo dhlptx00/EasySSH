@@ -8,7 +8,8 @@ export class EasySshPty implements vscode.Pseudoterminal {
   readonly onDidWrite = this.writeEmitter.event;
   private readonly closeEmitter = new vscode.EventEmitter<void>();
   readonly onDidClose = this.closeEmitter.event;
-  private readonly decoder = new InputDecoder();
+  private decoder = new InputDecoder();
+  private decoding = true;
   private ended = false;
 
   constructor(private readonly app: EasySshApp) {}
@@ -32,7 +33,14 @@ export class EasySshPty implements vscode.Pseudoterminal {
   }
 
   handleInput(data: string): void {
-    if (!this.ended) this.app.onInput(this.decoder.push(data));
+    if (this.ended) return;
+    const raw = this.app.takesRawInput();
+    if (raw === this.decoding) {
+      this.decoder = new InputDecoder();
+      this.decoding = !raw;
+    }
+    if (raw) this.app.onRawInput(data);
+    else this.app.onInput(this.decoder.push(data));
   }
 
   end(): void {

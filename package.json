@@ -25,6 +25,7 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "onCommand:easySsh.open",
+    "onCommand:easySsh.newTerminal",
     "onView:easySsh.sidebar"
   ],
   "capabilities": {
@@ -57,6 +58,11 @@
       {
         "command": "easySsh.open",
         "title": "Open",
+        "category": "Easy SSH"
+      },
+      {
+        "command": "easySsh.newTerminal",
+        "title": "New Terminal",
         "category": "Easy SSH"
       },
       {

@@ -10,6 +10,8 @@ describe('terminal input', () => {
     assert.deepEqual(decoder.push('\x1b'), [{ type: 'key', key: 'escape' }]);
     assert.deepEqual(decoder.push('\x7f'), [{ type: 'key', key: 'backspace' }]);
     assert.deepEqual(decoder.push('\r'), [{ type: 'key', key: 'enter' }]);
+    assert.deepEqual(decoder.push('\x1b[5~'), [{ type: 'key', key: 'pageup' }]);
+    assert.deepEqual(decoder.push('\x1b[6~'), [{ type: 'key', key: 'pagedown' }]);
     assert.deepEqual(decoder.push('\x1b[200~/tmp/a.txt\x1b[201~'), [{ type: 'paste', text: '/tmp/a.txt' }]);
   });
 

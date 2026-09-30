@@ -10,7 +10,9 @@ export type Key =
   | 'ctrl-c'
   | 'ctrl-d'
   | 'ctrl-u'
-  | 'delete';
+  | 'delete'
+  | 'pageup'
+  | 'pagedown';
 
 export type InputEvent =
   | { type: 'text'; text: string }
@@ -27,6 +29,8 @@ function csiKey(final: string, args: string): Key | undefined {
   if (final === 'C') return 'right';
   if (final === 'D') return 'left';
   if (final === '~' && (args === '3' || args.endsWith(';3'))) return 'delete';
+  if (final === '~' && (args === '5' || args.startsWith('5;'))) return 'pageup';
+  if (final === '~' && (args === '6' || args.startsWith('6;'))) return 'pagedown';
   return undefined;
 }
 

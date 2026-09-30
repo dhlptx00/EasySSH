@@ -16,6 +16,10 @@ export interface FileSession {
     signal: AbortSignal,
   ): Promise<{ uploaded: number; skipped: number }>;
   run(cwd: string, command: string, signal: AbortSignal, columns?: number): Promise<{ code: number; output: string }>;
+  openShell(columns: number, rows: number, onData: (chunk: string) => void, onClose: () => void): Promise<void>;
+  writeShell(data: string): void;
+  resizeShell(columns: number, rows: number): void;
+  hasShell(): boolean;
   close(): void;
 }
 

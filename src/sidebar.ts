@@ -1,13 +1,15 @@
 import * as vscode from 'vscode';
 
 export interface ActivityBarActions {
-  beginToggle(): boolean;
-  endToggle(hide: boolean): void;
+  /** Ignore focus changes while the side bar is put away. */
+  beginIconClick(): void;
+  /** Open another Easy SSH terminal after the side bar is closed. */
+  finishIconClick(): void;
 }
 
 /**
  * The activity-bar icon is a view container, so a click reveals this view.
- * Hand the side bar back immediately and toggle the terminal instead.
+ * Hand the side bar back immediately and open another terminal instead.
  */
 export class EasySshSidebar implements vscode.WebviewViewProvider, vscode.Disposable {
   static readonly viewId = 'easySsh.sidebar';
@@ -28,9 +30,9 @@ export class EasySshSidebar implements vscode.WebviewViewProvider, vscode.Dispos
   private onIconClick(): void {
     if (this.handling) return;
     this.handling = true;
-    const hide = this.actions.beginToggle();
+    this.actions.beginIconClick();
     void this.leaveSidebar().finally(() => {
-      this.actions.endToggle(hide);
+      this.actions.finishIconClick();
       this.handling = false;
     });
   }

@@ -233,7 +233,10 @@ function renderPanel(screen: Exclude<Screen, { kind: 'connections' | 'browse' }>
   return placePanel(content, view, input, anchor, links);
 }
 
-const BROWSE_HINT = 'Click a file name to download it to the Desktop. Drag a folder here to upload it into this directory.';
+function browseHint(clickHint: string): string {
+  const click = clickHint.toLowerCase().startsWith('cmd') ? 'Cmd-click' : 'Ctrl-click';
+  return `${click} a file name to download it to the Desktop. Drag a folder here to upload it into this directory.`;
+}
 
 function shellColumn(cols: number): { left: number; width: number } {
   return pageColumn(cols);
@@ -246,7 +249,7 @@ function renderShell(screen: Extract<Screen, { kind: 'browse' }>, view: RenderVi
   const { left, width } = shellColumn(cols);
   const promptBlock = 3;
   const promptTop = rows - promptBlock;
-  const hint = hintFrame(BROWSE_HINT, left, width, cols);
+  const hint = hintFrame(browseHint(view.clickHint), left, width, cols);
   hint.forEach((line, index) => {
     if (index < promptTop) lines[index] = line;
   });
@@ -394,7 +397,7 @@ function plainRow(line: PaintedLine, left: number, innerWidth: number, cols: num
   return boxSides(left, padded, cols);
 }
 
-function nameSpans(plain: string, entries: BrowseEntry[]): LineLink[] {
+export function nameSpans(plain: string, entries: BrowseEntry[]): LineLink[] {
   const ranked = entries
     .filter((entry) => entry.name && entry.name !== '..' && entry.name !== '.')
     .sort((a, b) => b.name.length - a.name.length || a.name.localeCompare(b.name));
@@ -407,7 +410,7 @@ function nameSpans(plain: string, entries: BrowseEntry[]): LineLink[] {
       if (at < 0) break;
       const end = at + entry.name.length;
       const before = at === 0 || isNameBoundary(plain[at - 1], 'before');
-      const after = end === plain.length || isNameBoundary(plain[end] ?? '', 'after');
+      const after = closesName(plain, end);
       let overlap = false;
       for (let index = at; index < end; index += 1) if (taken[index]) overlap = true;
       if (before && after && !overlap) {
@@ -430,6 +433,17 @@ function nameSpans(plain: string, entries: BrowseEntry[]): LineLink[] {
 function isNameBoundary(ch: string, side: 'before' | 'after'): boolean {
   if (side === 'after' && (ch === '/' || ch === '@' || ch === '*')) return true;
   return /[\s'"\\|=<>&;()[\]{},]/.test(ch);
+}
+
+/** `ls -F` markers end a name. `user@host` does not, so a prompt is not a download link. */
+function closesName(plain: string, end: number): boolean {
+  if (end >= plain.length) return true;
+  const ch = plain[end];
+  if (ch === '/' || ch === '@' || ch === '*') {
+    const next = plain[end + 1];
+    return next === undefined || isNameBoundary(next, 'before');
+  }
+  return isNameBoundary(ch, 'after');
 }
 
 function pickCard(screen: Extract<Screen, { kind: 'pick' }>, width: number, budget: number): PaintedLine[] {

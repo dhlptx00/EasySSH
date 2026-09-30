@@ -19,9 +19,17 @@ class PathLink extends vscode.TerminalLink {
     length: number,
     readonly remotePath: string,
     tooltip: string,
+    readonly owner: EasySshApp,
   ) {
     super(startIndex, length, tooltip);
   }
+}
+
+interface LiveTerminal {
+  pty: EasySshPty;
+  terminal: vscode.Terminal;
+  app: EasySshApp;
+  status?: string;
 }
 
 function readyTimeout(): number {
@@ -55,10 +63,9 @@ function importId(name: string, taken: Set<string>): string {
 }
 
 export class EasySshController implements vscode.TerminalLinkProvider<PathLink> {
-  private pty: EasySshPty | undefined;
-  private terminal: vscode.Terminal | undefined;
-  private app: EasySshApp | undefined;
-  /** True while the Easy SSH terminal panel is the one on screen. */
+  private readonly lives: LiveTerminal[] = [];
+  private active: LiveTerminal | undefined;
+  /** True while an Easy SSH terminal panel is the one on screen. */
   private shown = false;
   /** True after this session maximized the panel. Restored when the terminal is hidden. */
   private maximized = false;
@@ -74,34 +81,14 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
     this.status.tooltip = 'Open Easy SSH';
   }
 
-  isShowing(): boolean {
-    return this.shown && this.terminal !== undefined && this.terminal.exitStatus === undefined;
-  }
-
-  hide(): void {
-    this.shown = false;
-    const terminal = this.terminal;
-    const restore = this.maximized;
-    this.maximized = false;
-    const hideTerminal = () => {
-      if (terminal && terminal.exitStatus === undefined) terminal.hide();
-    };
-    if (!restore) {
-      hideTerminal();
-      return;
-    }
-    void vscode.commands.executeCommand('workbench.action.toggleMaximizedPanel').then(hideTerminal, hideTerminal);
-  }
-
-  /** Call before moving the side bar so a click is counted once. Returns whether to hide. */
-  beginToggle(): boolean {
+  /** Call before moving the side bar so that close does not clear the open terminal. */
+  beginIconClick(): void {
     this.settling += 1;
-    return this.isShowing();
   }
 
-  endToggle(hide: boolean): void {
-    if (hide) this.hide();
-    else this.open();
+  /** Each activity-bar click opens its own terminal. */
+  finishIconClick(): void {
+    this.spawn();
     setTimeout(() => {
       this.settling = Math.max(0, this.settling - 1);
     }, 250);
@@ -109,33 +96,67 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
 
   noteActiveTerminal(terminal: vscode.Terminal | undefined): void {
     if (this.settling > 0) return;
-    if (!this.terminal || this.terminal.exitStatus !== undefined) {
+    const live = this.lives.find((item) => item.terminal === terminal && item.terminal.exitStatus === undefined);
+    if (!live) {
       this.shown = false;
       return;
     }
-    this.shown = terminal === this.terminal;
+    this.active = live;
+    this.shown = true;
+    this.applyStatus(live.status);
   }
 
   open(): void {
-    if (this.terminal && this.terminal.exitStatus === undefined) {
+    const live = this.latest();
+    if (live) {
+      this.active = live;
       this.shown = true;
-      this.terminal.show();
+      live.terminal.show();
       this.maximizePanel();
+      this.applyStatus(live.status);
       return;
     }
+    this.spawn();
+  }
+
+  /** Open another Easy SSH terminal. Each one has its own connection. */
+  newTerminal(): void {
+    this.spawn();
+  }
+
+  private latest(): LiveTerminal | undefined {
+    for (let index = this.lives.length - 1; index >= 0; index -= 1) {
+      const live = this.lives[index];
+      if (live.terminal.exitStatus === undefined) return live;
+    }
+    return undefined;
+  }
+
+  private nextName(): string {
+    const used = new Set(this.lives.map((live) => live.terminal.name));
+    if (!used.has('Easy SSH')) return 'Easy SSH';
+    let index = 2;
+    while (used.has(`Easy SSH ${index}`)) index += 1;
+    return `Easy SSH ${index}`;
+  }
+
+  private spawn(): void {
     let app!: EasySshApp;
-    app = new EasySshApp(this.createHost(() => app), (data) => this.pty?.write(data));
-    this.app = app;
-    this.pty = new EasySshPty(app);
-    this.terminal = vscode.window.createTerminal({
-      name: 'Easy SSH',
-      pty: this.pty,
+    let pty!: EasySshPty;
+    app = new EasySshApp(this.createHost(() => app), (data) => pty.write(data));
+    pty = new EasySshPty(app);
+    const terminal = vscode.window.createTerminal({
+      name: this.nextName(),
+      pty,
       iconPath: new vscode.ThemeIcon('remote'),
       isTransient: true,
       location: vscode.TerminalLocation.Panel,
     });
+    const live: LiveTerminal = { pty, terminal, app };
+    this.lives.push(live);
+    this.active = live;
     this.shown = true;
-    this.terminal.show();
+    terminal.show();
     this.maximizePanel();
   }
 
@@ -146,16 +167,20 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
   }
 
   onClosed(terminal: vscode.Terminal): void {
-    if (terminal !== this.terminal) return;
-    this.terminal = undefined;
-    this.pty = undefined;
-    this.app = undefined;
-    this.shown = false;
-    if (this.maximized) {
-      this.maximized = false;
-      void vscode.commands.executeCommand('workbench.action.toggleMaximizedPanel');
+    const index = this.lives.findIndex((item) => item.terminal === terminal);
+    if (index < 0) return;
+    this.lives.splice(index, 1);
+    this.active = this.lives.find((item) => item.terminal === vscode.window.activeTerminal) ?? this.latest();
+    this.shown = this.active !== undefined && vscode.window.activeTerminal === this.active.terminal;
+    if (this.lives.length === 0) {
+      if (this.maximized) {
+        this.maximized = false;
+        void vscode.commands.executeCommand('workbench.action.toggleMaximizedPanel');
+      }
+      this.applyStatus(undefined);
+      return;
     }
-    this.status.text = '$(remote) Easy SSH';
+    if (this.shown && this.active) this.applyStatus(this.active.status);
   }
 
   async setDownloadFolder(): Promise<void> {
@@ -169,14 +194,15 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
   }
 
   provideTerminalLinks(context: vscode.TerminalLinkContext): PathLink[] {
-    if (!this.app || context.terminal !== this.terminal) return [];
-    return this.app.linkFor(context.line)
+    const live = this.lives.find((item) => item.terminal === context.terminal);
+    if (!live) return [];
+    return live.app.linkFor(context.line)
       .filter((link) => link.length > 0)
-      .map((link) => new PathLink(link.start, link.length, link.remotePath, link.tooltip));
+      .map((link) => new PathLink(link.start, link.length, link.remotePath, link.tooltip, live.app));
   }
 
   handleTerminalLink(link: PathLink): void {
-    this.app?.activatePath(link.remotePath);
+    link.owner.activatePath(link.remotePath);
   }
 
   private downloadFolder(): string {
@@ -249,20 +275,29 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
         }
       },
       setStatus: (text) => {
-        if (!text) {
-          this.status.text = '$(remote) Easy SSH';
-          this.status.tooltip = 'Open Easy SSH';
-          return;
-        }
-        const shown = text.length > 60 ? `${text.slice(0, 24)}…${text.slice(-30)}` : text;
-        this.status.text = `$(remote) ${shown}`;
-        this.status.tooltip = text;
+        const live = this.lives.find((item) => item.app === app());
+        if (live) live.status = text;
+        if (!live || this.active?.app === app()) this.applyStatus(text);
       },
       log: (line) => {
         this.output.appendLine(line);
       },
-      quit: () => this.pty?.end(),
+      quit: () => {
+        const live = this.lives.find((item) => item.app === app());
+        live?.pty.end();
+      },
     };
+  }
+
+  private applyStatus(text: string | undefined): void {
+    if (!text) {
+      this.status.text = '$(remote) Easy SSH';
+      this.status.tooltip = 'Open Easy SSH';
+      return;
+    }
+    const shown = text.length > 60 ? `${text.slice(0, 24)}…${text.slice(-30)}` : text;
+    this.status.text = `$(remote) ${shown}`;
+    this.status.tooltip = text;
   }
 
   private async importConfig(): Promise<{ ok: boolean; message: string }> {

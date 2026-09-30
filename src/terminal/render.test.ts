@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { BrowseEntry } from '../types';
-import { render } from './render';
+import { nameSpans, render } from './render';
 import { emptyDraft } from './wizard';
 
 const view = {
@@ -134,14 +134,15 @@ describe('terminal screen', () => {
     assert.match(text, /README\.md/);
     assert.doesNotMatch(text, /secret-list-only/);
     assert.doesNotMatch(text, /4 KB/);
-    const hintAt = frame.lines.findIndex((line) => line.plain.includes('Click a file name'));
+    const hintAt = frame.lines.findIndex((line) => line.plain.includes('Cmd-click'));
     const outputAt = frame.lines.findIndex((line) => line.plain.includes('README.md'));
     assert.ok(hintAt > 0 && hintAt < outputAt);
     assert.match(frame.lines[hintAt - 1].plain, /╭/);
     assert.ok(frame.lines[hintAt - 1].plain.indexOf('╭') > 0);
     assert.match(frame.lines[hintAt].plain, /│/);
     const hint = text.replace(/[│╭╮╰╯─]/g, ' ').replace(/\s+/g, ' ');
-    assert.match(hint, /Click a file name to download it to the Desktop/);
+    assert.doesNotMatch(hint, /Select text/);
+    assert.match(hint, /Cmd-click a file name to download it to the Desktop/);
     assert.match(hint, /Drag a folder here to upload it into this directory/);
     const row = frame.lines[outputAt];
     const link = frame.links.get(row.plain.trimEnd())?.[0];
@@ -257,5 +258,14 @@ describe('terminal screen', () => {
     const text = frame.lines.map((line) => line.plain).join('\n');
     assert.match(text, /10\.0\.0\.8/);
     assert.match(text, /host/);
+  });
+
+  it('links ls names and leaves a user@host prompt alone', () => {
+    const entries: BrowseEntry[] = [
+      { name: 'root', path: '/var/root', kind: 'dir', size: 0, mtime: 0 },
+      { name: 'notes', path: '/var/notes', kind: 'file', size: 1, mtime: 0 },
+    ];
+    assert.deepEqual(nameSpans('root@host:~$ ', entries).map((link) => link.remotePath), []);
+    assert.deepEqual(nameSpans('notes@ notes', entries).map((link) => link.remotePath), ['/var/notes', '/var/notes']);
   });
 });

@@ -19,6 +19,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.onDidChangeActiveTerminal((terminal) => controller.noteActiveTerminal(terminal)),
     vscode.window.registerWebviewViewProvider(EasySshSidebar.viewId, sidebar),
     vscode.commands.registerCommand('easySsh.open', () => controller.open()),
+    vscode.commands.registerCommand('easySsh.newTerminal', () => controller.newTerminal()),
     vscode.commands.registerCommand('easySsh.setDownloadFolder', () => controller.setDownloadFolder()),
     vscode.commands.registerCommand('easySsh.resetHostKeys', () => controller.resetHostKeys()),
     vscode.window.registerTerminalLinkProvider(controller),

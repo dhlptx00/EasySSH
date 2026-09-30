@@ -1,12 +1,14 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { StringDecoder } from 'node:string_decoder';
 import { PassThrough, Readable, Writable, type Readable as NodeReadable } from 'stream';
-import { Client, type ClientChannel, type ConnectConfig, type SFTPWrapper } from 'ssh2';
+import { Client, type ClientChannel, type ConnectConfig, type SFTPWrapper, type TerminalModes } from 'ssh2';
 import { remoteDirname, remoteJoin } from '../remotePath';
 import { expandHome } from '../text';
 import type { AuthMethod, BrowseEntry, ConnectionRecord, JumpSpec, SecretPayload, TransferState } from '../types';
 import { HostKeyChangedError, TransferCancelled, humanizeSshError } from './errors';
+import { SHELL_HOOK } from './shellFeed';
 
 export interface HostKeyStore {
   get(host: string, port: number): string | undefined;
@@ -36,6 +38,70 @@ interface FreshKey {
   port: number;
   fingerprint: string;
   wasNew: boolean;
+}
+
+/** Linux tty defaults so an interactive shell enables line editing and Tab. */
+export function loginTerminalModes(): TerminalModes {
+  return {
+    VINTR: 3,
+    VQUIT: 28,
+    VERASE: 127,
+    VKILL: 21,
+    VEOF: 4,
+    VEOL: 255,
+    VEOL2: 255,
+    VSTART: 17,
+    VSTOP: 19,
+    VSUSP: 26,
+    VDSUSP: 255,
+    VREPRINT: 18,
+    VWERASE: 23,
+    VLNEXT: 22,
+    VFLUSH: 255,
+    VSWTCH: 255,
+    VDISCARD: 15,
+    IGNPAR: 0,
+    PARMRK: 0,
+    INPCK: 0,
+    ISTRIP: 0,
+    INLCR: 0,
+    IGNCR: 0,
+    ICRNL: 1,
+    IUCLC: 0,
+    IXON: 1,
+    IXANY: 0,
+    IXOFF: 0,
+    IMAXBEL: 1,
+    ISIG: 1,
+    ICANON: 1,
+    ECHO: 1,
+    ECHOE: 1,
+    ECHOK: 1,
+    ECHONL: 0,
+    NOFLSH: 0,
+    TOSTOP: 0,
+    IEXTEN: 1,
+    ECHOCTL: 1,
+    ECHOKE: 1,
+    PENDIN: 0,
+    OPOST: 1,
+    OLCUC: 0,
+    ONLCR: 1,
+    OCRNL: 0,
+    ONOCR: 0,
+    ONLRET: 0,
+    CS7: 0,
+    CS8: 1,
+    PARENB: 0,
+    PARODD: 0,
+  };
+}
+
+export function terminalWindow(columns: number, rows: number): { cols: number; rows: number } {
+  return {
+    cols: Math.max(20, Math.min(400, Math.floor(columns) || 80)),
+    rows: Math.max(2, Math.min(400, Math.floor(rows) || 24)),
+  };
 }
 
 function shQuote(value: string): string {
@@ -245,6 +311,7 @@ async function collectUploads(
 
 export class SshSession {
   private closed = false;
+  private shell: ClientChannel | null = null;
 
   constructor(
     private readonly clients: Client[],
@@ -260,6 +327,12 @@ export class SshSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    try {
+      this.shell?.close();
+    } catch {
+      // Already closed.
+    }
+    this.shell = null;
     try {
       this.sftp.end();
     } catch {
@@ -373,6 +446,53 @@ export class SshSession {
       );
     }
     return { uploaded: files.length, skipped };
+  }
+
+  /**
+   * Open the account's login shell on a terminal.
+   * Aliases, functions, and the working directory then persist, as they do over ssh.
+   */
+  async openShell(columns: number, rows: number, onData: (chunk: string) => void, onClose: () => void): Promise<void> {
+    if (this.closed) throw new Error('Not connected');
+    const client = this.clients[this.clients.length - 1];
+    if (!client) throw new Error('Not connected');
+    const window = terminalWindow(columns, rows);
+    const stream = await new Promise<ClientChannel>((resolve, reject) => {
+      client.shell({ rows: window.rows, cols: window.cols, term: 'xterm-256color', modes: loginTerminalModes() }, (err, channel) => {
+        if (err || !channel) reject(err ?? new Error('The server did not open a shell'));
+        else resolve(channel);
+      });
+    });
+    if (this.closed) {
+      stream.close();
+      throw new Error('Not connected');
+    }
+    this.shell = stream;
+    const decoder = new StringDecoder('utf8');
+    stream.on('data', (chunk: Buffer | string) => {
+      const text = typeof chunk === 'string' ? chunk : decoder.write(chunk);
+      if (text) onData(text);
+    });
+    stream.on('close', () => {
+      const rest = decoder.end();
+      if (rest) onData(rest);
+      this.shell = null;
+      onClose();
+    });
+    stream.write(`${SHELL_HOOK}\n`);
+  }
+
+  writeShell(data: string): void {
+    this.shell?.write(data);
+  }
+
+  hasShell(): boolean {
+    return this.shell !== null;
+  }
+
+  resizeShell(columns: number, rows: number): void {
+    const window = terminalWindow(columns, rows);
+    this.shell?.setWindow(window.rows, window.cols, 0, 0);
   }
 
   /** Run a command in a directory. The command sees that directory as its working directory. */
