@@ -14,16 +14,22 @@ import { defaultSlashPick, matchSlashCommands, parseConnectionCommand, type Slas
 import { peelPointer, type PointerEvent } from './pointer';
 import { linkAt, nameSpans, paint, render, sessionHint, type LineLink } from './render';
 import { Viewport } from './viewport';
-import { classifyStale, isHostSwitch, isUserSwitch, staleUploadQuestion, type StaleCwd } from './cwdTracking';
+import { classifyStale, FolderFollower, isHostSwitch, isUserSwitch, staleUploadQuestion, type StaleCwd } from './cwdTracking';
 import type { ConnectionItem, Screen } from './screen';
 import { applyChoice, applyStep, choiceIndex, choiceOptions, draftFromRecord, emptyDraft, nextStep, prevStep, toConnection } from './wizard';
 
 /** Connected shell. The login PTY is shown directly; this only tracks the directory. */
 interface RemoteShell {
   title: string;
+  /** The shell's folder: reported by the prompt hook, or followed from typed `cd` lines. */
   cwd: string;
   entries: BrowseEntry[];
   transfer?: TransferState;
+  /**
+   * True when the shell has no prompt hook (e.g. after `sudo su`) and a line could
+   * not be followed. `cwd` is then only the last known folder, and names get no links.
+   */
+  lost?: boolean;
 }
 
 /** xterm mouse reporting, used only in plain-click mode. */
@@ -86,6 +92,11 @@ export class EasySshApp {
   /** Command lines submitted since the last folder report (null when the line was not tracked). */
   private pendingCommands: (string | null)[] = [];
   private reportWaiters: (() => void)[] = [];
+  /** Follows `cd` lines while the prompt hook is silent. Undefined while the hook reports. */
+  private follower: FolderFollower | undefined;
+  /** Submitted lines the follower has not applied yet (null when the line was not tracked). */
+  private followLines: (string | null)[] = [];
+  private followTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly host: AppHost,
@@ -137,7 +148,7 @@ export class EasySshApp {
 
   linkFor(line: string): LineLink[] {
     if (this.raw) {
-      if (this.remoteAlt || !this.remote) return [];
+      if (this.remoteAlt || !this.remote || this.remote.lost) return [];
       return nameSpans(line, this.remote.entries, this.downloadLabel());
     }
     const found = this.links.get(line) ?? this.links.get(line.trimEnd());
@@ -165,6 +176,7 @@ export class EasySshApp {
     this.clearShellTimer();
     this.clearRawTimer();
     this.clearStatusTimer();
+    this.resetFollow();
     this.connectAbort?.abort();
     this.transferAbort?.abort();
     this.session?.close();
@@ -548,7 +560,7 @@ export class EasySshApp {
       else if (update.mouse) this.mouseOff();
     }
     if (update.cwd !== undefined) this.onCwdReport(update.altScreen, update.mouse);
-    if (!update.cwd || !this.remote || update.cwd === this.remote.cwd) return;
+    if (!update.cwd || !this.remote || (update.cwd === this.remote.cwd && !this.remote.lost)) return;
     this.remote = { ...this.remote, cwd: update.cwd };
     this.host.setStatus(`${this.remote.title}:${update.cwd}`);
     const cwd = update.cwd;
@@ -560,6 +572,7 @@ export class EasySshApp {
     this.cwdReports += 1;
     this.awaitingSince = undefined;
     this.pendingCommands = [];
+    this.resetFollow();
     const waiters = this.reportWaiters;
     this.reportWaiters = [];
     for (const wake of waiters) wake();
@@ -585,10 +598,73 @@ export class EasySshApp {
     }
     if (this.awaitingSince === undefined) this.awaitingSince = Date.now();
     for (const line of done) {
-      if (line === '\u0000') this.pendingCommands.push(null);
-      else if (line.trim()) this.pendingCommands.push(line.trim());
+      const entry = line === '\u0000' ? null : line.trim();
+      if (entry === '') continue;
+      this.pendingCommands.push(entry);
+      this.followLines.push(entry);
     }
     if (this.pendingCommands.length > 20) this.pendingCommands.splice(0, this.pendingCommands.length - 20);
+    // Too many lines to replay safely: forget the folder rather than guess.
+    if (this.followLines.length > 200) this.followLines.splice(0, this.followLines.length, null);
+    this.scheduleFollow();
+  }
+
+  /**
+   * Once the prompt hook has missed its grace period, the shell is one Easy SSH did
+   * not set up (`sudo su`, sh, a nested bash). Follow its `cd` lines from then on.
+   */
+  private scheduleFollow(): void {
+    if (this.follower) {
+      void this.enqueue(() => this.followFolder());
+      return;
+    }
+    if (this.followTimer) return;
+    const epoch = this.browseEpoch;
+    this.followTimer = setTimeout(() => {
+      this.followTimer = undefined;
+      if (epoch !== this.browseEpoch || this.closed || this.awaitingSince === undefined) return;
+      void this.enqueue(() => this.followFolder());
+    }, REPORT_GRACE_MS);
+  }
+
+  private resetFollow(): void {
+    this.follower = undefined;
+    this.followLines = [];
+    if (this.followTimer) clearTimeout(this.followTimer);
+    this.followTimer = undefined;
+  }
+
+  /** Apply the lines submitted since the last report, then list the folder they lead to. */
+  private async followFolder(): Promise<void> {
+    const session = this.session;
+    if (!session || !this.remote || !this.raw || this.awaitingSince === undefined) return;
+    const epoch = this.browseEpoch;
+    if (!this.follower) this.follower = new FolderFollower(this.remote.cwd);
+    const follower = this.follower;
+    while (this.followLines.length > 0) {
+      const line = this.followLines.shift() ?? null;
+      await follower.apply(line, (path) => folderCheck(session, path));
+      if (epoch !== this.browseEpoch || this.follower !== follower || !this.remote) return;
+    }
+    const cwd = follower.cwd;
+    if (cwd === null) {
+      if (this.remote.lost) return;
+      this.remote = { ...this.remote, entries: [], lost: true };
+      this.host.log('The current folder is not known (a line in a shell without the prompt hook could not be followed). Names are not linked until cd /absolute/path.');
+      if (!this.remote.transfer) this.host.setStatus(`${this.remote.title}: folder unknown`);
+      return;
+    }
+    if (cwd === this.remote.cwd && !this.remote.lost) return;
+    let entries = withParent(cwd, []);
+    try {
+      entries = withParent(cwd, await session.list(cwd));
+    } catch (err) {
+      // e.g. a folder only root can read. Links there would download nothing.
+      this.host.log(`Could not list ${cwd}: ${humanizeSshError(err)}`);
+    }
+    if (epoch !== this.browseEpoch || this.follower !== follower || !this.remote || follower.cwd !== cwd) return;
+    this.remote = { ...this.remote, cwd, entries, lost: false };
+    if (!this.remote.transfer) this.host.setStatus(`${this.remote.title}:${cwd}`);
   }
 
   /** Undefined while the tracked folder is current; otherwise why it is not. */
@@ -597,6 +673,7 @@ export class EasySshApp {
     const wait = REPORT_GRACE_MS - (Date.now() - this.awaitingSince);
     if (wait > 0) await this.waitForReport(wait);
     if (this.awaitingSince === undefined) return undefined;
+    await this.followFolder();
     const commands = this.pendingCommands;
     const kind = classifyStale(commands);
     const command = kind === 'user'
@@ -604,7 +681,8 @@ export class EasySshApp {
       : kind === 'host'
         ? commands.find(isHostSwitch)
         : commands.find((line) => !!line);
-    return { kind, command: command ?? null, everReported: this.cwdReports > 0 };
+    const followed = this.follower !== undefined && this.remote !== null && !this.remote.lost;
+    return { kind, command: command ?? null, everReported: this.cwdReports > 0, followed };
   }
 
   private waitForReport(ms: number): Promise<void> {
@@ -778,7 +856,7 @@ export class EasySshApp {
     const session = this.session;
     const line = this.inputLine.text();
     const cwd = this.remote?.cwd ?? '';
-    const query = session && line !== null && !this.remoteAlt ? completionQuery(line, cwd) : null;
+    const query = session && line !== null && !this.remoteAlt && !this.remote?.lost ? completionQuery(line, cwd) : null;
     if (!session || !query || line === null) {
       this.inputLine.forget();
       this.writeShell('\t');
@@ -877,6 +955,7 @@ export class EasySshApp {
     this.cwdReports = 0;
     this.awaitingSince = undefined;
     this.pendingCommands = [];
+    this.resetFollow();
     this.screen = { kind: 'connecting', label: `${record.username}@${record.host}:${record.port}` };
     this.draw();
     this.host.log(`Connecting to ${record.username}@${record.host}:${record.port}`);
@@ -938,6 +1017,7 @@ export class EasySshApp {
     if (this.shellClosing && !this.session && !this.raw) return;
     this.shellClosing = true;
     this.clearShellTimer();
+    this.resetFollow();
     this.browseEpoch += 1;
     this.transferAbort?.abort();
     const session = this.session;
@@ -950,7 +1030,10 @@ export class EasySshApp {
 
   private enterDirectory(path: string): void {
     if (!this.remote || !this.session) return;
-    this.session.writeShell(`cd ${shellQuote(path)}\n`);
+    const line = `cd ${shellQuote(path)}\n`;
+    // Counted like a typed line, so a shell without the prompt hook is still followed.
+    this.noteSubmitted(line, false);
+    this.session.writeShell(line);
   }
 
   private async openRemote(remotePath: string): Promise<void> {
@@ -1058,8 +1141,10 @@ export class EasySshApp {
     let asUser = '';
     const names = paths.map((item) => item.split(/[/\\]/).filter(Boolean).pop() || item);
     const stale = await this.staleCwd();
+    if (epoch !== this.browseEpoch || !this.remote || this.session !== session) return;
+    // Waiting for the prompt hook may have moved the folder (a report, or followed cd lines).
+    cwd = this.remote.cwd;
     if (stale) {
-      if (epoch !== this.browseEpoch || !this.remote || this.session !== session) return;
       const home = await session.resolve('~', cwd).then((found) => found.path).catch(() => undefined);
       const question = staleUploadQuestion(stale, cwd, this.loginUser, this.hostName, names, home);
       this.host.log(`Upload of ${names.join(', ')}: ${question.detail}`);
@@ -1129,7 +1214,7 @@ export class EasySshApp {
     try {
       const entries = withParent(cwd, await this.session.list(cwd));
       if (epoch !== this.browseEpoch || !this.remote) return;
-      this.remote = { ...this.remote, cwd, entries };
+      this.remote = { ...this.remote, cwd, entries, lost: false };
       this.host.setStatus(`${this.remote.title}:${cwd}`);
     } catch {
       // The shell can be in a directory SFTP is not allowed to read. Keep the previous list.
@@ -1213,6 +1298,19 @@ export class EasySshApp {
     });
     this.links = frame.links;
     this.emit(paint(frame));
+  }
+}
+
+/** Whether a `cd` target exists as a folder, as far as the SFTP user can tell. */
+async function folderCheck(session: FileSession, path: string): Promise<boolean | undefined> {
+  try {
+    const found = await session.resolve(path, '/');
+    if (found.kind === 'dir') return true;
+    if (found.kind === 'file') return false;
+    return undefined;
+  } catch (err) {
+    // SFTP status 2 is "no such file": the shell's cd failed too.
+    return (err as { code?: unknown } | null)?.code === 2 ? false : undefined;
   }
 }
 

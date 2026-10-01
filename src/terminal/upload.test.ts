@@ -73,7 +73,9 @@ describe('upload target', () => {
     assert.match(question.message, /捕获\.PNG/);
     assert.match(question.detail, /after "sudo su"/);
     assert.match(question.detail, /as hqxrd, not as the switched user/);
-    assert.equal(question.cwd, '/home/hqxrd');
+    // The root shell has no prompt hook, but its cd lines were followed.
+    assert.match(question.detail, /followed the cd commands typed since then to \/tmp/);
+    assert.equal(question.cwd, '/tmp');
     assert.equal(remote.status.at(-1), 'Upload cancelled');
     app.dispose();
   });
