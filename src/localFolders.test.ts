@@ -62,6 +62,13 @@ describe('local Desktop folder', () => {
     assert.deepEqual(probe.calls, ['User Shell Folders', 'Shell Folders', 'powershell.exe']);
   });
 
+  it('falls back to %USERPROFILE%\\Desktop with Windows separators on any OS', () => {
+    const desktop = 'C:\\Users\\hqxrd\\Desktop';
+    assert.equal(resolveDesktop(winProbe(new Set([desktop]), {})), desktop);
+    const have = new Set(['C:\\Users\\hqxrd\\Downloads']);
+    assert.equal(resolveDownloadFolder(undefined, undefined, 'C:\\Users\\hqxrd', (file) => have.has(file)), 'C:\\Users\\hqxrd\\Downloads');
+  });
+
   it('returns undefined when there is no Desktop, as on some servers', () => {
     assert.equal(resolveDesktop(winProbe(new Set(), {})), undefined);
   });

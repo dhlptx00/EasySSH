@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4
+
+- Fixed: file and folder names sometimes got no link (no underline on hover, nothing on Ctrl+click) in one terminal while another terminal on the same server worked, for example in split view. This happened after `sudo su` (or `su`, `sudo -i`, a nested `bash`, or a login shell without the prompt hook). That shell does not report its folder, so Easy SSH kept matching names against the folder you were in before the switch. Easy SSH now follows the `cd` commands you type in such a shell, checks each folder on the server, and links names in the folder you are actually in. Ctrl+clicking a folder there is followed too, and `exit` returns to the folder the switched shell started from.
+- When Easy SSH cannot follow a command in such a shell (a line recalled from history, `cd ~`, `cd $VAR`, `pushd`, a pipe), it shows **folder unknown** in the status bar and does not link names, instead of linking files from the wrong folder. Any `cd /absolute/path` finds the folder again.
+- Uploads after `sudo su` offer the folder Easy SSH followed, not the folder from before the switch. They still ask first, because the file is written over SFTP as the login user.
+- Windows: downloads fall back to `Desktop` and `Downloads` folders with Windows path separators.
+- CI runs typecheck and tests on Windows, macOS, and Linux with Node 20 and 22, and checks that the extension packages.
+
 ## 0.1.3
 
 - Text in the remote shell can be selected with the mouse again. File and directory names now open with Ctrl+click (Cmd+click on macOS) through VS Code's terminal links, so Easy SSH no longer turns on terminal mouse reporting. Hovering a name shows what a click does.
