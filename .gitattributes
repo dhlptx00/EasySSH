@@ -1,0 +1,8 @@
+# Keep LF in the working tree on every OS (Windows runners default to core.autocrlf=true),
+# so tests that embed multi-line text see the same bytes everywhere.
+* text=auto eol=lf
+*.png binary
+*.gif binary
+*.jpg binary
+*.ico binary
+*.vsix binary

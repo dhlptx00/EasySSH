@@ -49,6 +49,7 @@ export function parseXdgDesktop(content: string | undefined, home: string): stri
  * Returns undefined when no Desktop folder exists.
  */
 export function resolveDesktop(probe: FolderProbe): string | undefined {
+  const paths = probe.platform === 'win32' ? path.win32 : path.posix;
   const candidates: (() => string | undefined)[] = [];
   if (probe.platform === 'win32') {
     candidates.push(() => {
@@ -63,9 +64,9 @@ export function resolveDesktop(probe: FolderProbe): string | undefined {
       "[Console]::OutputEncoding=[Text.Encoding]::UTF8; [Environment]::GetFolderPath('Desktop')",
     ])?.trim() || undefined);
   } else if (probe.platform === 'linux') {
-    candidates.push(() => parseXdgDesktop(probe.readFile(path.join(probe.home, '.config', 'user-dirs.dirs')), probe.home));
+    candidates.push(() => parseXdgDesktop(probe.readFile(paths.join(probe.home, '.config', 'user-dirs.dirs')), probe.home));
   }
-  candidates.push(() => path.join(probe.home, 'Desktop'));
+  candidates.push(() => paths.join(probe.home, 'Desktop'));
   for (const candidate of candidates) {
     let found: string | undefined;
     try {
@@ -122,7 +123,7 @@ export function resolveDownloadFolder(
     if (exists(expanded)) return expanded;
   }
   if (desktop && exists(desktop)) return desktop;
-  const downloads = path.join(home, 'Downloads');
+  const downloads = localJoin(home, 'Downloads');
   if (exists(downloads)) return downloads;
   return home;
 }
@@ -132,6 +133,11 @@ export function downloadFolderLabel(folder: string, desktop: string | undefined,
   if (desktop && samePath(folder, desktop)) return 'the Desktop';
   if (home && (folder.startsWith(home + '/') || folder.startsWith(home + '\\'))) return '~' + folder.slice(home.length);
   return folder;
+}
+
+/** Join with the separator the home path already uses (\\ on Windows, / elsewhere). */
+function localJoin(dir: string, name: string): string {
+  return /^[A-Za-z]:|\\/.test(dir) ? path.win32.join(dir, name) : path.posix.join(dir, name);
 }
 
 function samePath(a: string, b: string): boolean {

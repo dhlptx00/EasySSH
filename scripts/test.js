@@ -11,6 +11,10 @@ function walk(dir, out = []) {
   return out;
 }
 
-const files = walk(path.join(__dirname, '..', 'src'));
-const result = spawnSync('npx', ['tsx', '--test', ...files], { stdio: 'inherit' });
+const files = walk(path.join(__dirname, '..', 'src')).sort();
+// Run tsx's CLI with this same node binary. Spawning `npx` needs a shell on
+// Windows (npx is a .cmd shim) and fails there with ENOENT.
+const tsx = require.resolve('tsx/cli');
+const result = spawnSync(process.execPath, [tsx, '--test', ...files], { stdio: 'inherit' });
+if (result.error) console.error(result.error);
 process.exit(result.status === null ? 1 : result.status);

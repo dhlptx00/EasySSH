@@ -131,7 +131,10 @@ describe('upload permissions', () => {
     assert.equal(uploadMode(0o40666, DEFAULT_DIR_MODE, 'win32'), 0o755);
   });
 
-  it('does not upload files as 0666 and creates folders with the local mode', { skip: process.platform === 'win32' }, async () => {
+  // Windows has no POSIX permission bits (stat reports 0666/0777 and chmod only toggles
+  // read-only), so there uploads use 0644 for files and 0755 for new folders.
+  const windows = process.platform === 'win32';
+  it('does not upload files as 0666 and creates folders with the local mode', async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'easy-ssh-upload-'));
     try {
       const folder = path.join(root, 'site');
@@ -148,10 +151,10 @@ describe('upload permissions', () => {
       const result = await session.upload([folder], '/home/dev', () => {}, new AbortController().signal);
 
       assert.deepEqual(result, { uploaded: 2, skipped: 0 });
-      assert.equal(sftp.files.get('/home/dev/site/notes.txt'), 0o640);
-      assert.equal(sftp.files.get('/home/dev/site/bin/run.sh'), 0o750);
-      assert.equal(sftp.dirs.get('/home/dev/site'), 0o750);
-      assert.equal(sftp.dirs.get('/home/dev/site/bin'), 0o700);
+      assert.equal(sftp.files.get('/home/dev/site/notes.txt'), windows ? 0o644 : 0o640);
+      assert.equal(sftp.files.get('/home/dev/site/bin/run.sh'), windows ? 0o644 : 0o750);
+      assert.equal(sftp.dirs.get('/home/dev/site'), windows ? 0o755 : 0o750);
+      assert.equal(sftp.dirs.get('/home/dev/site/bin'), windows ? 0o755 : 0o700);
       assert.equal(sftp.dirs.get('/home/dev'), 0o755);
     } finally {
       await fs.promises.rm(root, { recursive: true, force: true });
