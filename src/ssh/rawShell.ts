@@ -1,7 +1,9 @@
 /**
- * Watch a login-shell byte stream without changing it.
- * Bytes before the first OSC 7 directory report are hidden so the setup
- * command does not appear. After that, every byte is forwarded.
+ * Watch a login-shell byte stream. Output passes through unchanged, so the
+ * MOTD, "Last login" and the first prompt show as they do over ssh (B12).
+ * While Easy SSH's setup line runs, hide() holds the output (its echo) until
+ * the hook's first directory report, then replaces the old prompt with the
+ * new one. release() shows whatever was held when no report comes.
  */
 export interface RawShellUpdate {
   text: string;
@@ -48,13 +50,33 @@ const HOLD_LIMIT = 64_000;
 
 export class RawShellTap {
   private buffer = '';
-  private primed = false;
+  private held = '';
+  private hidden = false;
+  /** True when the visible output ends at the start of a line (no prompt shown). */
+  private atLineStart = true;
+  private replacePrompt = false;
+  /** Visible text since the last line break, for prompt detection. */
+  private tailLine = '';
   private altScreen = false;
   private bracketedPaste = false;
   private mouse = false;
 
-  get ready(): boolean {
-    return this.primed;
+  /** True when the last visible line looks like a shell prompt ("$ ", "# ", "% ", "> "). */
+  promptLike(): boolean {
+    return /[$#%>\u276f\u00bb\u279c\u03bb]\s*$/.test(this.tailLine);
+  }
+
+  /** True while setup output is held back. */
+  get hiding(): boolean {
+    return this.hidden;
+  }
+
+  /** Hold output from now until the prompt hook reports a directory. */
+  hide(): void {
+    this.hidden = true;
+    this.held = '';
+    // A prompt is on screen: the hook's prompt replaces it instead of repeating it.
+    this.replacePrompt = !this.atLineStart;
   }
 
   push(chunk: string): RawShellUpdate {
@@ -69,26 +91,36 @@ export class RawShellTap {
 
   /** Show whatever is still held. Used when the shell never reports a directory. */
   release(): RawShellUpdate {
-    return this.drain(true);
+    if (!this.hidden) return this.drain(true);
+    this.hidden = false;
+    const text = this.held + this.buffer;
+    this.held = '';
+    this.buffer = '';
+    return this.paint(text);
   }
 
   private drain(flush: boolean): RawShellUpdate {
     const cut = flush ? this.buffer.length : safeCut(this.buffer);
-    const slice = this.buffer.slice(0, cut);
-    if (!this.primed) {
-      const mark = parseRaw(slice, SEQUENCE_LIMIT).osc7[0];
-      if (!mark && !flush && this.buffer.length <= HOLD_LIMIT) return this.blank();
-      if (!mark && cut === 0) return this.blank();
-      this.primed = true;
-      const text = mark ? slice.slice(mark.end) : slice;
-      this.buffer = this.buffer.slice(cut);
-      const update = this.paint(text);
-      const cwd = update.cwd ?? (mark ? ownCwdReport(mark.cwd) : undefined);
-      return { ...update, cwd };
-    }
     if (cut === 0) return this.blank();
+    const slice = this.buffer.slice(0, cut);
     this.buffer = this.buffer.slice(cut);
-    return this.paint(slice);
+    if (!this.hidden) return this.paint(slice);
+    this.held += slice;
+    const mark = parseRaw(this.held, SEQUENCE_LIMIT).osc7.find((report) => ownCwdReport(report.cwd) !== undefined);
+    if (!mark) {
+      if (this.held.length > HOLD_LIMIT) return this.release();
+      return this.blank();
+    }
+    this.hidden = false;
+    const before = this.held.slice(0, mark.end);
+    const after = this.held.slice(mark.end);
+    this.held = '';
+    // Keep the mode changes made while hidden (bracketed paste, for example).
+    this.paint(before);
+    const lines = (after.match(/\n/g) ?? []).length;
+    const prefix = this.replacePrompt ? `\r${lines > 0 ? `\x1b[${lines}A` : ''}\x1b[J` : '';
+    const update = this.paint(after);
+    return { ...update, text: prefix + update.text, cwd: update.cwd ?? ownCwdReport(mark.cwd) };
   }
 
   private paint(text: string): RawShellUpdate {
@@ -104,6 +136,12 @@ export class RawShellTap {
     }
     let last: string | undefined;
     for (const report of parsed.osc7) last = ownCwdReport(report.cwd) ?? last;
+    const visible = stripSequences(text);
+    const lastBreak = Math.max(visible.lastIndexOf('\n'), visible.lastIndexOf('\r'));
+    const tail = visible.slice(lastBreak + 1);
+    if (tail.length > 0) this.atLineStart = false;
+    else if (lastBreak >= 0) this.atLineStart = true;
+    this.tailLine = (lastBreak >= 0 ? tail : this.tailLine + tail).slice(-200);
     return {
       text,
       cwd: last,
@@ -122,6 +160,15 @@ export class RawShellTap {
       mouse: this.mouse,
     };
   }
+}
+
+/** Text without escape sequences and control bytes other than CR and LF. */
+function stripSequences(text: string): string {
+  return text
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b[@-Z\\-_]/g, '')
+    .replace(/[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]/g, '');
 }
 
 export function normalizeCwd(value: string): string | undefined {

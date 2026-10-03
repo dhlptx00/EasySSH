@@ -18,10 +18,6 @@ function secretKey(id: string): string {
   return `easySsh.secret.${id}`;
 }
 
-function hostKey(host: string, port: number): string {
-  return `${host}:${port}`;
-}
-
 function isRecord(value: unknown): value is ConnectionRecord {
   if (!value || typeof value !== 'object') return false;
   const record = value as ConnectionRecord;
@@ -36,6 +32,13 @@ function isRecord(value: unknown): value is ConnectionRecord {
   );
 }
 
+/** Drop unknown fields and fix types of a stored record. */
+function cleanRecord(record: ConnectionRecord): ConnectionRecord {
+  const clean: ConnectionRecord = { ...record, jumps: record.jumps ?? [] };
+  if (record.askPassword !== true) delete clean.askPassword;
+  return clean;
+}
+
 export class ConnectionStore {
   constructor(
     private readonly state: StateStore,
@@ -45,7 +48,7 @@ export class ConnectionStore {
   async list(): Promise<ConnectionRecord[]> {
     const stored = this.state.get<unknown>(CONNECTIONS);
     if (!Array.isArray(stored)) return [];
-    return stored.filter(isRecord).map((record) => ({ ...record, jumps: record.jumps ?? [] }));
+    return stored.filter(isRecord).map(cleanRecord);
   }
 
   async save(record: ConnectionRecord, secret: SecretUpdate): Promise<void> {
@@ -92,14 +95,40 @@ export class ConnectionStore {
     return { password: Boolean(payload.password), passphrase: Boolean(payload.passphrase) };
   }
 
-  getHostKey(host: string, port: number): string | undefined {
-    const table = this.state.get<Record<string, string>>(HOST_KEYS) ?? {};
-    return table[hostKey(host, port)];
+  /** Save a password typed at connect time, keeping a saved passphrase. */
+  async savePassword(id: string, password: string): Promise<void> {
+    const current = await this.secret(id);
+    const payload: SecretPayload = { ...current, password };
+    await this.secrets.store(secretKey(id), JSON.stringify(payload));
   }
 
-  async trustHost(host: string, port: number, fingerprint: string): Promise<void> {
+  /**
+   * The trusted fingerprint for a host id: "host:port" for a direct server,
+   * "jump:22>host:port" behind jump hosts.
+   */
+  getHostKey(id: string): string | undefined {
+    const table = this.state.get<Record<string, string>>(HOST_KEYS) ?? {};
+    return table[id];
+  }
+
+  async trustHost(id: string, fingerprint: string): Promise<void> {
     const table = { ...(this.state.get<Record<string, string>>(HOST_KEYS) ?? {}) };
-    table[hostKey(host, port)] = fingerprint;
+    table[id] = fingerprint;
+    await this.state.update(HOST_KEYS, table);
+  }
+
+  /** Host ids with a trusted key, sorted. */
+  listHostKeys(): { id: string; fingerprint: string }[] {
+    const table = this.state.get<Record<string, string>>(HOST_KEYS) ?? {};
+    return Object.entries(table)
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+      .map(([id, fingerprint]) => ({ id, fingerprint }))
+      .sort((a, b) => a.id.localeCompare(b.id, 'en'));
+  }
+
+  async forgetHostKeys(ids: string[]): Promise<void> {
+    const table = { ...(this.state.get<Record<string, string>>(HOST_KEYS) ?? {}) };
+    for (const id of ids) delete table[id];
     await this.state.update(HOST_KEYS, table);
   }
 

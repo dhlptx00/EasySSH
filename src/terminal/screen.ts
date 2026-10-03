@@ -1,3 +1,5 @@
+import type { AskRequest } from '../ssh/auth';
+import type { HostKeyQuestion } from '../ssh/session';
 import type { Notice } from '../types';
 import type { Draft, Step } from './wizard';
 
@@ -25,4 +27,9 @@ export type Screen =
       notice?: Notice;
     }
   | { kind: 'connecting'; label: string }
-  | { kind: 'trust'; hostLabel: string; fingerprint: string; choice: number };
+  /** A host key to confirm while connecting: a new server, or a changed key. */
+  | { kind: 'trust'; question: HostKeyQuestion; choice: number }
+  /** A password, passphrase, or keyboard-interactive prompt while connecting. */
+  | { kind: 'ask'; label: string; request: AskRequest; input: string; save: boolean }
+  /** The connection dropped. Enter reconnects, Esc goes back to the list. */
+  | { kind: 'lost'; name: string; reason: string; choice: number; retryIn?: number };

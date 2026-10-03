@@ -1,21 +1,31 @@
-import type { BrowseEntry, ConnectionRecord, SecretUpdate, TransferState } from '../types';
+import type { ConnectUi } from '../ssh/session';
+import type { ShellKind } from '../ssh/shellFeed';
+import type {
+  BrowseEntry,
+  ConflictChoice,
+  ConnectionRecord,
+  DownloadResult,
+  FolderDownloadResult,
+  SecretUpdate,
+  TransferOptions,
+  UploadOptions,
+  UploadResult,
+} from '../types';
 import type { UploadQuestion } from './cwdTracking';
 
 export interface FileSession {
   list(dir: string): Promise<BrowseEntry[]>;
   resolve(input: string, cwd: string): Promise<{ path: string; kind: 'dir' | 'file' | 'other' }>;
-  download(
+  /** False when the server has no SFTP (terminal only). */
+  hasFiles?(): boolean;
+  download(remotePath: string, folder: string, name: string, options: TransferOptions): Promise<DownloadResult>;
+  downloadFolder(
     remotePath: string,
-    localPath: string,
-    onProgress: (done: number, total: number) => void,
-    signal: AbortSignal,
-  ): Promise<void>;
-  upload(
-    localPaths: string[],
-    remoteDir: string,
-    onProgress: (state: TransferState) => void,
-    signal: AbortSignal,
-  ): Promise<{ uploaded: number; skipped: number }>;
+    folder: string,
+    name: string,
+    options: TransferOptions & { maxFiles: number },
+  ): Promise<FolderDownloadResult>;
+  upload(localPaths: string[], remoteDir: string, options: UploadOptions): Promise<UploadResult>;
   openShell(columns: number, rows: number, onData: (chunk: string) => void, onClose: () => void): Promise<void>;
   writeShell(data: string): void;
   resizeShell(columns: number, rows: number): void;
@@ -26,13 +36,29 @@ export interface FileSession {
 export interface ConnectResult {
   session: FileSession;
   cwd: string;
-  trustedNewKey: boolean;
   usedFallbackPath: boolean;
+  /** Lines shown above the shell (a trusted host key, terminal-only mode). */
+  notes?: string[];
+  /** The login shell family, from a probe. Undefined means unknown. */
+  shell?: ShellKind;
 }
 
 export interface ImportReport {
   ok: boolean;
   message: string;
+}
+
+/** A progress notification with a Cancel button. */
+export interface ProgressHandle {
+  report(text: string, fraction: number | undefined): void;
+  close(): void;
+}
+
+export interface TransferSettings {
+  /** SFTP requests in flight per file. */
+  concurrency: number;
+  /** Most files per upload drop or folder download. */
+  maxFiles: number;
 }
 
 export interface AppHost {
@@ -41,12 +67,12 @@ export interface AppHost {
   deleteConnection(id: string): Promise<void>;
   secretFlags(id: string): Promise<{ password: boolean; passphrase: boolean }>;
   importConfig(): Promise<ImportReport>;
-  connect(record: ConnectionRecord, options: { acceptChangedKey: boolean; signal: AbortSignal }): Promise<ConnectResult>;
+  /** Open a session. Prompts (passwords, host keys) go through ui. */
+  connect(record: ConnectionRecord, options: { signal: AbortSignal; ui: ConnectUi }): Promise<ConnectResult>;
   downloadFolder(): string;
   home(): string;
   chooseDownloadFolder(): Promise<string | undefined>;
   classifyDrop(text: string): string[] | null;
-  localDownloadPath(name: string): string;
   keyExists(path: string): boolean;
   setStatus(text: string | undefined): void;
   log(line: string): void;
@@ -68,6 +94,21 @@ export interface AppHost {
   plainClick?(): boolean;
   /** How a name is opened, for hints, e.g. "Ctrl+click". */
   clickLabel?(): string;
-  /** Where downloads go, for tooltips, e.g. "the Desktop". */
+  /** Where downloads go, for tooltips, e.g. "~/Downloads". */
   downloadLabel?(): string;
+  transferSettings?(): TransferSettings;
+  /** A cancellable progress notification for big transfers. */
+  showProgress?(title: string, cancel: () => void): ProgressHandle;
+  /** Some dropped items already exist on the server. */
+  resolveConflict?(existing: string[], remoteDir: string): Promise<ConflictChoice>;
+  /** The clipboard text. A paste equals it; a drag-and-drop does not (B1). */
+  clipboardText?(): Promise<string>;
+  /** A dropped path outside the local home folder: upload it, or type it as text? */
+  confirmLocalUpload?(paths: string[]): Promise<'upload' | 'paste'>;
+  /** Rename the terminal tab, e.g. to the connection name. Undefined restores the default. */
+  setTitle?(title: string | undefined): void;
+  /** Reconnect by itself after a drop (setting easySsh.autoReconnect). */
+  autoReconnect?(): boolean;
+  /** Tells the host a transfer runs, so the status bar item can cancel it. */
+  transferActive?(active: boolean): void;
 }

@@ -83,8 +83,14 @@
         "category": "Easy SSH"
       },
       {
+        "command": "easySsh.cancelTransfer",
+        "title": "Cancel Transfer",
+        "category": "Easy SSH",
+        "icon": "$(close)"
+      },
+      {
         "command": "easySsh.resetHostKeys",
-        "title": "Reset Trusted Host Keys",
+        "title": "Forget Trusted Host Keys…",
         "category": "Easy SSH"
       }
     ],
@@ -94,18 +100,115 @@
         "easySsh.downloadFolder": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Local folder for files you download. Leave empty to use the Desktop (on Windows, the redirected or OneDrive Desktop when there is one)."
+          "order": 0,
+          "markdownDescription": "Local folder for files and folders you download. Leave empty to use your Downloads folder (the redirected or localized one on Windows and Linux); when there is none, the Desktop, then your home folder."
         },
         "easySsh.plainClick": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Open file and folder names in the remote shell with a plain click instead of Ctrl+click (Cmd+click on macOS). This turns on terminal mouse reporting, so selecting text then needs Shift+drag (on macOS, Option+drag with `terminal.integrated.macOptionClickForcesSelection` turned on). Applies to new connections."
+          "order": 1,
+          "markdownDescription": "Download file and folder names in the remote shell with a plain click instead of Ctrl+click (Cmd+click on macOS). A folder downloads with everything in it. This turns on terminal mouse reporting, so selecting text then needs Shift+drag (on macOS, Option+drag with `terminal.integrated.macOptionClickForcesSelection` turned on). Applies to new connections."
+        },
+        "easySsh.hostKeyPolicy": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "trustFirst"
+          ],
+          "default": "ask",
+          "order": 2,
+          "enumDescriptions": [
+            "Show the fingerprint of a server Easy SSH and ~/.ssh/known_hosts do not know, and connect only after you accept it.",
+            "Trust a new server's key on first connect without asking (the 0.1.x behaviour). A changed key is always asked about."
+          ],
+          "markdownDescription": "What to do with the host key of a server seen for the first time. Keys in `~/.ssh/known_hosts` are always trusted, and `@revoked` keys are always refused."
+        },
+        "easySsh.knownHostsWriteBack": {
+          "type": "boolean",
+          "default": false,
+          "order": 3,
+          "markdownDescription": "Also append host keys you accept to `~/.ssh/known_hosts`, so `ssh` trusts them too. Off by default: Easy SSH only reads that file."
+        },
+        "easySsh.transferConcurrency": {
+          "type": "number",
+          "default": 32,
+          "minimum": 1,
+          "maximum": 64,
+          "order": 4,
+          "markdownDescription": "SFTP requests kept in flight per file. Higher is faster on slow or distant links; use 1 for servers that misbehave with parallel requests."
+        },
+        "easySsh.maxTransferFiles": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 1,
+          "maximum": 100000,
+          "order": 5,
+          "markdownDescription": "Most files one drop may upload, and one folder download may contain. Bigger folders are refused before anything is copied."
+        },
+        "easySsh.keepaliveInterval": {
+          "type": "number",
+          "default": 15000,
+          "minimum": 0,
+          "maximum": 3600000,
+          "order": 6,
+          "markdownDescription": "Milliseconds between SSH keepalive messages. Lower it when a NAT or firewall drops idle connections. `0` turns keepalives off."
+        },
+        "easySsh.keepaliveCountMax": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 100,
+          "order": 7,
+          "markdownDescription": "Unanswered keepalives before the connection counts as lost."
+        },
+        "easySsh.autoReconnect": {
+          "type": "boolean",
+          "default": false,
+          "order": 8,
+          "markdownDescription": "When a connection drops, reconnect by itself (after 2, 5 and 10 seconds) into the same folder. Off: Easy SSH shows the reason with a Reconnect button."
+        },
+        "easySsh.maximizePanel": {
+          "type": "boolean",
+          "default": true,
+          "order": 9,
+          "markdownDescription": "Maximize the panel when Easy SSH opens in it, and restore it when the last Easy SSH terminal closes. A panel that was maximized already is left alone."
+        },
+        "easySsh.terminalLocation": {
+          "type": "string",
+          "enum": [
+            "panel",
+            "editor"
+          ],
+          "default": "panel",
+          "order": 10,
+          "enumDescriptions": [
+            "Open Easy SSH terminals in the panel.",
+            "Open Easy SSH terminals as editor tabs."
+          ],
+          "markdownDescription": "Where new Easy SSH terminals open."
+        },
+        "easySsh.windowsAgent": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "openssh",
+            "pageant"
+          ],
+          "default": "auto",
+          "order": 11,
+          "enumDescriptions": [
+            "The Windows OpenSSH agent when its service runs, otherwise Pageant.",
+            "Always the Windows OpenSSH agent (\\\\.\\pipe\\openssh-ssh-agent).",
+            "Always Pageant (PuTTY)."
+          ],
+          "markdownDescription": "Which SSH agent connections with agent sign-in use on Windows when `SSH_AUTH_SOCK` is not set. Ignored on macOS and Linux."
         },
         "easySsh.readyTimeout": {
           "type": "number",
           "default": 20000,
           "minimum": 3000,
-          "markdownDescription": "How long to wait for an SSH handshake, in milliseconds."
+          "order": 12,
+          "markdownDescription": "How long to wait for an SSH handshake, in milliseconds. Time spent answering a prompt (password, host key) does not count."
         }
       }
     }
@@ -115,8 +218,10 @@
     "compile": "node esbuild.js",
     "build": "node esbuild.js --production",
     "watch": "node esbuild.js --watch",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && tsc --noEmit -p test/integration",
+    "lint": "eslint .",
     "test": "node scripts/test.js",
+    "test:integration": "node scripts/test.js test/integration",
     "package": "npx @vscode/vsce package --no-dependencies"
   },
   "vsce": {
@@ -126,12 +231,16 @@
     "ssh2": "^1.17.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/node": "^22.15.0",
     "@types/ssh2": "^1.15.6",
-    "@types/vscode": "^1.85.0",
+    "@types/vscode": "~1.85.0",
     "@xterm/headless": "^5.5.0",
     "esbuild": "^0.28.2",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0",
     "tsx": "^4.23.15",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.71.0"
   }
 }

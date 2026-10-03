@@ -5,14 +5,35 @@ export class TransferCancelled extends Error {
   }
 }
 
-export class HostKeyChangedError extends Error {
-  override readonly name = 'HostKeyChangedError';
+/** A host key that cannot be used: listed as @revoked in known_hosts. */
+export class HostKeyError extends Error {
+  override readonly name = 'HostKeyError';
   constructor(
     readonly host: string,
     readonly port: number,
     readonly fingerprint: string,
   ) {
-    super(`Host key changed for ${host}:${port}`);
+    super(`The host key of ${host}:${port} is marked @revoked in ~/.ssh/known_hosts. Not connecting.`);
+  }
+}
+
+/** The user answered No on the host key screen. */
+export class HostKeyDeclined extends Error {
+  override readonly name = 'HostKeyDeclined';
+  constructor(readonly host: string, readonly port: number) {
+    super('Host key was not trusted');
+  }
+}
+
+/** A folder or drop with more files than the limit. */
+export class TooManyFiles extends Error {
+  override readonly name = 'TooManyFiles';
+  constructor(readonly limit: number, what: 'upload' | 'download') {
+    super(
+      what === 'upload'
+        ? `That drop has more than ${limit} files. Upload a smaller selection (setting easySsh.maxTransferFiles).`
+        : `That folder has more than ${limit} files. Download a smaller folder (setting easySsh.maxTransferFiles).`,
+    );
   }
 }
 
@@ -74,18 +95,23 @@ export class TransferError extends Error {
 export function humanizeSshError(err: unknown): string {
   if (err instanceof TransferCancelled) return 'Cancelled';
   if (err instanceof TransferError) return err.message;
-  if (err instanceof HostKeyChangedError) return err.message;
+  if (err instanceof HostKeyError || err instanceof HostKeyDeclined || err instanceof TooManyFiles) return err.message;
+  if (err instanceof Error && err.name === 'AuthFailure') return err.message;
+  if (err instanceof Error && err.name === 'IncompleteTransfer') return `The transfer stopped early (${err.message})`;
   if (!(err instanceof Error)) return 'Something went wrong';
   const code = (err as NodeJS.ErrnoException).code;
   const message = err.message || '';
   if (code === 'ENOTFOUND' || /getaddrinfo/i.test(message)) return 'Could not resolve the host';
   if (code === 'ECONNREFUSED') return 'Connection refused';
   if (code === 'ETIMEDOUT' || /timed out/i.test(message)) return 'Connection timed out';
+  if (code === 'ECONNRESET') return 'The connection was reset (ECONNRESET)';
+  if (/keepalive timeout/i.test(message)) return 'The server stopped answering (keepalive timeout)';
   if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') return 'Network unreachable';
   if (code === 'EACCES' || code === 'EPERM') return 'Cannot write to the download folder. Allow the editor to access the Desktop.';
   if (/authentication methods failed/i.test(message) || /all configured authentication/i.test(message)) {
-    return 'Authentication failed';
+    return 'Authentication failed. Check the user name and the sign-in method';
   }
+  if (/unable to start subsystem|subsystem request failed/i.test(message)) return 'The server does not offer SFTP';
   if (/unsupported key format|cannot parse privatekey|bad passphrase|encrypted/i.test(message)) {
     return 'Could not read the private key. Check the path and passphrase.';
   }

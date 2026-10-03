@@ -8,6 +8,14 @@ export class EasySshPty implements vscode.Pseudoterminal {
   readonly onDidWrite = this.writeEmitter.event;
   private readonly closeEmitter = new vscode.EventEmitter<void>();
   readonly onDidClose = this.closeEmitter.event;
+  private readonly nameEmitter = new vscode.EventEmitter<string>();
+  /** Renames the terminal tab, e.g. to the connection name (U8). */
+  readonly onDidChangeName = this.nameEmitter.event;
+  /** Last size VS Code reported. */
+  rows = 0;
+  columns = 0;
+  /** Called after every size change, for the panel maximize check. */
+  onResize: ((rows: number) => void) | undefined;
   private decoder = new InputDecoder();
   private decoding = true;
   private ended = false;
@@ -18,7 +26,13 @@ export class EasySshPty implements vscode.Pseudoterminal {
     if (!this.ended) this.writeEmitter.fire(data);
   }
 
+  rename(name: string): void {
+    if (!this.ended) this.nameEmitter.fire(name);
+  }
+
   open(dimensions: vscode.TerminalDimensions | undefined): void {
+    this.rows = dimensions?.rows ?? 0;
+    this.columns = dimensions?.columns ?? 0;
     this.app.setSize(dimensions?.columns ?? 80, dimensions?.rows ?? 24);
     this.writeEmitter.fire('\x1b[?1049h\x1b[?2004h');
     this.app.open();
@@ -29,7 +43,10 @@ export class EasySshPty implements vscode.Pseudoterminal {
   }
 
   setDimensions(dimensions: vscode.TerminalDimensions): void {
+    this.rows = dimensions.rows;
+    this.columns = dimensions.columns;
     this.app.setSize(dimensions.columns, dimensions.rows);
+    this.onResize?.(dimensions.rows);
   }
 
   handleInput(data: string): void {

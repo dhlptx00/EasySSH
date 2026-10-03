@@ -81,7 +81,7 @@ describe('remote tab', () => {
     app.onInput([{ type: 'key', key: 'enter' }]);
     await flush();
     const shown = chunks.join('').replace(/\x1b\[[0-9;]*m/g, '');
-    assert.match(shown, /Ctrl\+click a file name to download/);
+    assert.match(shown, /Ctrl\+click a file or folder name to download it/);
     assert.doesNotMatch(shown, /Cmd-click|Select text/);
     for (const ch of 'cd /tm') app.onRawInput(ch);
     app.onRawInput('\t');
@@ -124,8 +124,9 @@ function connectedHost(written: string[], listed: string[]): AppHost {
       return [];
     },
     resolve: async () => ({ path: '/root', kind: 'dir' }),
-    download: async () => {},
-    upload: async () => ({ uploaded: 0, skipped: 0 }),
+    download: async () => ({ localPath: '', bytes: 0, grew: false }),
+    downloadFolder: async () => ({ localPath: '', files: 0, folders: 0, bytes: 0, skipped: [] }),
+    upload: async () => ({ uploaded: 0, skipped: 0, kept: 0, renamed: [] }),
     openShell: async () => {
       shell = true;
     },
@@ -144,12 +145,11 @@ function connectedHost(written: string[], listed: string[]): AppHost {
     deleteConnection: async () => {},
     secretFlags: async () => ({ password: false, passphrase: false }),
     importConfig: async () => ({ ok: true, message: 'Imported 1' }),
-    connect: async () => ({ session, cwd: '/root', trustedNewKey: false, usedFallbackPath: false }),
+    connect: async () => ({ session, cwd: '/root', usedFallbackPath: false, shell: 'other' }),
     downloadFolder: () => '/Users/me/Desktop',
     home: () => '/Users/me',
     chooseDownloadFolder: async () => undefined,
     classifyDrop: () => null,
-    localDownloadPath: (name) => name,
     keyExists: () => true,
     setStatus: () => {},
     log: () => {},

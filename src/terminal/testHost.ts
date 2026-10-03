@@ -1,5 +1,5 @@
 import { remoteBasename, remoteDirname, remoteJoin } from '../remotePath';
-import type { BrowseEntry, ConnectionRecord, TransferState } from '../types';
+import type { BrowseEntry, ConflictChoice, ConnectionRecord, TransferProgress, UploadOptions } from '../types';
 import type { UploadQuestion } from './cwdTracking';
 import type { AppHost, FileSession } from './host';
 
@@ -9,6 +9,8 @@ export interface FakeRemote {
   session: FileSession;
   written: string[];
   uploads: { paths: string[]; dir: string }[];
+  downloads: { remotePath: string; folder: string; name: string; kind: 'file' | 'folder' }[];
+  conflicts: string[][];
   status: string[];
   logs: string[];
   notes: { tone: 'info' | 'error'; text: string }[];
@@ -25,7 +27,14 @@ export function fakeRemote(options: {
   home?: string;
   files?: BrowseEntry[];
   answer?: (question: UploadQuestion) => string | undefined;
-  upload?: (paths: string[], dir: string) => Promise<{ uploaded: number; skipped: number }>;
+  upload?: (paths: string[], dir: string, options: UploadOptions) => Promise<{ uploaded: number; skipped: number }>;
+  /** Called for each download; resolve to finish it. */
+  download?: (remotePath: string, kind: 'file' | 'folder', signal: AbortSignal, progress: (state: TransferProgress) => void) => Promise<void>;
+  clipboard?: string;
+  conflict?: ConflictChoice;
+  /** Answer for a dropped path outside the home folder. */
+  localUpload?: 'upload' | 'paste';
+  connect?: () => Promise<never>;
   list?: (dir: string) => Promise<BrowseEntry[]>;
   /**
    * A server filesystem: folder path to its entries. When given, list and resolve
@@ -51,6 +60,8 @@ export function fakeRemote(options: {
     record,
     written: [],
     uploads: [],
+    downloads: [],
+    conflicts: [],
     status: [],
     logs: [],
     notes: [],
@@ -61,11 +72,21 @@ export function fakeRemote(options: {
       resolve: options.tree
         ? async (input, cwd) => treeResolve(options.tree ?? {}, input === '~' ? options.home ?? `/home/${username}` : remoteJoin(cwd, input))
         : async (input) => ({ path: input === '~' ? options.home ?? `/home/${username}` : input, kind: 'dir' }),
-      download: async () => {},
-      upload: async (paths: string[], dir: string, onProgress: (state: TransferState) => void) => {
+      download: async (remotePath, folder, name, transfer) => {
+        remote.downloads.push({ remotePath, folder, name, kind: 'file' });
+        await options.download?.(remotePath, 'file', transfer.signal, transfer.onProgress);
+        return { localPath: `${folder}/${name}`, bytes: 1, grew: false };
+      },
+      downloadFolder: async (remotePath, folder, name, transfer) => {
+        remote.downloads.push({ remotePath, folder, name, kind: 'folder' });
+        await options.download?.(remotePath, 'folder', transfer.signal, transfer.onProgress);
+        return { localPath: `${folder}/${name}`, files: 2, folders: 1, bytes: 2, skipped: [] };
+      },
+      upload: async (paths: string[], dir: string, transfer: UploadOptions) => {
         remote.uploads.push({ paths, dir });
-        onProgress({ direction: 'upload', label: 'x', done: 1, total: 1, index: 1, count: paths.length });
-        return options.upload ? options.upload(paths, dir) : { uploaded: paths.length, skipped: 0 };
+        transfer.onProgress({ phase: 'copy', bytes: 1, totalBytes: 1, files: 1, totalFiles: paths.length });
+        const result = options.upload ? await options.upload(paths, dir, transfer) : { uploaded: paths.length, skipped: 0 };
+        return { ...result, kept: 0, renamed: [] };
       },
       openShell: async (_columns, _rows, data) => {
         shell = true;
@@ -88,12 +109,11 @@ export function fakeRemote(options: {
     deleteConnection: async () => {},
     secretFlags: async () => ({ password: false, passphrase: false }),
     importConfig: async () => ({ ok: true, message: '' }),
-    connect: async () => ({ session: remote.session, cwd: options.cwd ?? `/home/${username}`, trustedNewKey: false, usedFallbackPath: false }),
+    connect: options.connect ?? (async () => ({ session: remote.session, cwd: options.cwd ?? `/home/${username}`, usedFallbackPath: false, shell: 'bash' as const })),
     downloadFolder: () => 'C:\\Users\\me\\Desktop',
     home: () => 'C:\\Users\\me',
     chooseDownloadFolder: async () => undefined,
     classifyDrop: (text) => (/^[A-Za-z]:\//.test(text) ? [text] : null),
-    localDownloadPath: (name) => name,
     keyExists: () => true,
     setStatus: (text) => {
       if (text) remote.status.push(text);
@@ -111,6 +131,12 @@ export function fakeRemote(options: {
       remote.notes.push({ tone, text });
     },
     plainClick: () => options.plainClick ?? false,
+    clipboardText: async () => options.clipboard ?? '',
+    resolveConflict: async (existing) => {
+      remote.conflicts.push(existing);
+      return options.conflict ?? 'replace';
+    },
+    confirmLocalUpload: async () => options.localUpload ?? 'upload',
   };
   return remote;
 }
