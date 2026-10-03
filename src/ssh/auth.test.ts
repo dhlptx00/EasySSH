@@ -36,6 +36,18 @@ function answer(attempt: Attempt, prompts: Prompt[], name = '', instructions = '
   return new Promise((resolve) => attempt.prompt(name, instructions, '', prompts, resolve));
 }
 
+/**
+ * ssh2's generateKeyPairSync('ed25519') now and then (about 1 in 200) returns a
+ * key its own parseKey rejects as malformed. Real keys come from ssh-keygen, so
+ * only the test fixtures need this: generate until the key parses.
+ */
+function keyPair(options?: { passphrase: string; cipher: string; rounds: number }): { private: string; public: string } {
+  for (;;) {
+    const pair = options ? utils.generateKeyPairSync('ed25519', options) : utils.generateKeyPairSync('ed25519');
+    if (!(utils.parseKey(pair.private, options?.passphrase) instanceof Error)) return pair;
+  }
+}
+
 describe('authentication planner', () => {
   it('tries the saved password once, then asks, up to three times (S3)', async () => {
     const ctx = context([{ value: 'typed1', save: true }, { value: 'typed2', save: false }, { value: 'typed3', save: false }], { savedPassword: 'saved' });
@@ -103,7 +115,7 @@ describe('authentication planner', () => {
   });
 
   it('asks for the key passphrase and retries a wrong one (S3)', async () => {
-    const pair = utils.generateKeyPairSync('ed25519', { passphrase: 'right', cipher: 'aes256-ctr', rounds: 4 });
+    const pair = keyPair({ passphrase: 'right', cipher: 'aes256-ctr', rounds: 4 });
     const ctx = context([{ value: 'wrong', save: false }, { value: 'right', save: false }], { readKey: () => Buffer.from(pair.private) });
     const planner = new AuthPlanner({ ...server, auth: 'privateKey', privateKeyPath: '/home/me/.ssh/id_ed25519' }, ctx);
     await step(planner, null);
@@ -115,7 +127,7 @@ describe('authentication planner', () => {
   });
 
   it('uses the saved passphrase without asking', async () => {
-    const pair = utils.generateKeyPairSync('ed25519', { passphrase: 'pp', cipher: 'aes256-ctr', rounds: 4 });
+    const pair = keyPair({ passphrase: 'pp', cipher: 'aes256-ctr', rounds: 4 });
     const ctx = context([], { readKey: () => Buffer.from(pair.private), savedPassphrase: { keyPath: '/k', passphrase: 'pp' } });
     const planner = new AuthPlanner({ ...server, auth: 'privateKey', privateKeyPath: '/k' }, ctx);
     await step(planner, null);
@@ -125,7 +137,7 @@ describe('authentication planner', () => {
   });
 
   it('tries the agent, then the default key files, like ssh (F7)', async () => {
-    const pair = utils.generateKeyPairSync('ed25519');
+    const pair = keyPair();
     const ctx = context([], {
       agent: '/tmp/agent.sock',
       identityFiles: ['/home/me/.ssh/id_ed25519', '/home/me/.ssh/id_rsa'],
@@ -153,7 +165,7 @@ describe('authentication planner', () => {
     assert.equal(await step(keyOnly, ['publickey']), false);
     assert.match(keyOnly.explain(), /does not accept passwords \(it allows: publickey\)/);
 
-    const key = new AuthPlanner({ ...server, auth: 'privateKey', privateKeyPath: '/k/id_ed25519' }, context([], { readKey: () => Buffer.from(utils.generateKeyPairSync('ed25519').private) }));
+    const key = new AuthPlanner({ ...server, auth: 'privateKey', privateKeyPath: '/k/id_ed25519' }, context([], { readKey: () => Buffer.from(keyPair().private) }));
     await step(key, null);
     await step(key, ['publickey']);
     assert.equal(await step(key, ['publickey']), false);
