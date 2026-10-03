@@ -9,6 +9,7 @@ export type Step =
   | 'port'
   | 'username'
   | 'auth'
+  | 'passwordMode'
   | 'password'
   | 'keyPath'
   | 'passphrase'
@@ -23,6 +24,8 @@ export interface Draft {
   port: string;
   username: string;
   auth: AuthMethod | '';
+  /** save stores the password; ask asks for it at every connect. */
+  passwordMode: '' | 'save' | 'ask';
   password: string;
   keepPassword: boolean;
   keyPath: string;
@@ -39,6 +42,7 @@ export interface Draft {
   originalJump: string;
   originalJumps: JumpSpec[];
   originalKeyPath: string;
+  originalAuth: AuthMethod | '';
 }
 
 export interface Prompt {
@@ -55,6 +59,7 @@ export function emptyDraft(): Draft {
     port: '22',
     username: '',
     auth: '',
+    passwordMode: '',
     password: '',
     keepPassword: false,
     keyPath: '',
@@ -69,6 +74,7 @@ export function emptyDraft(): Draft {
     originalJump: '',
     originalJumps: [],
     originalKeyPath: '',
+    originalAuth: '',
   };
 }
 
@@ -84,6 +90,7 @@ export function draftFromRecord(
     port: String(record.port),
     username: record.username,
     auth: record.auth,
+    passwordMode: record.auth === 'password' ? (record.askPassword ? 'ask' : 'save') : '',
     keyPath: record.privateKeyPath ?? '',
     startPath: record.startPath ?? '',
     startMode: record.startPath ? 'custom' : 'home',
@@ -96,6 +103,7 @@ export function draftFromRecord(
     originalJump: jump,
     originalJumps: record.jumps.map((item) => ({ ...item })),
     originalKeyPath: record.privateKeyPath ?? '',
+    originalAuth: record.auth,
   };
 }
 
@@ -110,9 +118,11 @@ export function nextStep(step: Step, draft: Draft): Step | 'done' {
     case 'username':
       return 'auth';
     case 'auth':
-      if (draft.auth === 'password') return 'password';
+      if (draft.auth === 'password') return 'passwordMode';
       if (draft.auth === 'privateKey') return 'keyPath';
       return 'jumpChoice';
+    case 'passwordMode':
+      return draft.passwordMode === 'ask' ? 'jumpChoice' : 'password';
     case 'password':
       return 'jumpChoice';
     case 'keyPath':
@@ -146,20 +156,22 @@ export function prevStep(step: Step, draft: Draft): Step | 'start' {
       return 'port';
     case 'auth':
       return 'username';
-    case 'password':
+    case 'passwordMode':
       return 'auth';
+    case 'password':
+      return 'passwordMode';
     case 'keyPath':
       return 'auth';
     case 'passphrase':
       return 'keyPath';
     case 'startPathChoice':
-      if (draft.auth === 'password') return 'password';
+      if (draft.auth === 'password') return draft.passwordMode === 'ask' ? 'passwordMode' : 'password';
       if (draft.auth === 'privateKey') return 'passphrase';
       return 'auth';
     case 'startPath':
       return 'startPathChoice';
     case 'jumpChoice':
-      if (draft.auth === 'password') return 'password';
+      if (draft.auth === 'password') return draft.passwordMode === 'ask' ? 'passwordMode' : 'password';
       if (draft.auth === 'privateKey') return 'passphrase';
       return 'auth';
     case 'jump':
@@ -205,10 +217,14 @@ export function promptFor(step: Step, draft: Draft): Prompt {
         masked: false,
         fallback: authWord(draft.auth),
       };
+    case 'passwordMode':
+      return { label: 'password', hint: 'Save the password, or type it at every connect', masked: false, fallback: '' };
     case 'password':
       return {
         label: 'password',
-        hint: draft.hasSavedPassword ? 'Press enter to keep the saved password' : 'Stored in the editor secret storage',
+        hint: draft.hasSavedPassword
+          ? 'Press enter to keep the saved password'
+          : 'Stored in the editor secret storage. Leave empty to be asked when you connect',
         masked: true,
         fallback: '',
       };
@@ -237,7 +253,7 @@ export function promptFor(step: Step, draft: Draft): Prompt {
     case 'jump':
       return {
         label: 'jump host',
-        hint: 'user@host:port, comma separated. Each hop uses the same login',
+        hint: 'user@host:port, comma separated. Each hop signs in like the server; you are asked when one needs another password',
         masked: false,
         fallback: draft.jump,
       };
@@ -260,6 +276,8 @@ export function stepValue(step: Step, draft: Draft): string {
       return draft.username;
     case 'auth':
       return authWord(draft.auth) || '(unset)';
+    case 'passwordMode':
+      return draft.passwordMode === 'ask' ? 'Ask each time' : 'Save';
     case 'password':
       return draft.password ? '••••' : draft.keepPassword ? '(saved)' : '(empty)';
     case 'keyPath':
@@ -297,6 +315,12 @@ export function choiceOptions(step: Step): ChoiceOption[] | null {
       { id: 'agent', label: 'SSH agent', hint: 'Use a key already loaded in your agent' },
     ];
   }
+  if (step === 'passwordMode') {
+    return [
+      { id: 'save', label: 'Save the password', hint: 'Stored in the editor secret storage (OS keychain)' },
+      { id: 'ask', label: 'Ask each time', hint: 'Nothing is stored; type it when you connect' },
+    ];
+  }
   if (step === 'startPathChoice') {
     return [
       { id: 'home', label: 'Home directory', hint: 'Open your home directory on the server' },
@@ -317,9 +341,11 @@ export function choiceIndex(step: Step, draft: Draft): number {
   if (!options) return 0;
   const id = step === 'auth'
     ? draft.auth
-    : step === 'startPathChoice'
-      ? draft.startMode
-      : draft.jumpMode;
+    : step === 'passwordMode'
+      ? draft.passwordMode || 'save'
+      : step === 'startPathChoice'
+        ? draft.startMode
+        : draft.jumpMode;
   const index = options.findIndex((option) => option.id === id);
   return index >= 0 ? index : 0;
 }
@@ -333,6 +359,10 @@ export function applyChoice(step: Step, optionId: string, draft: Draft): { draft
   const next: Draft = { ...draft, originalJumps: draft.originalJumps.map((item) => ({ ...item })) };
   if (step === 'auth') {
     next.auth = option.id as AuthMethod;
+    return { draft: next };
+  }
+  if (step === 'passwordMode') {
+    next.passwordMode = option.id === 'ask' ? 'ask' : 'save';
     return { draft: next };
   }
   if (step === 'startPathChoice') {
@@ -455,23 +485,34 @@ export function applyStep(step: Step, typed: string, draft: Draft, ctx: ApplyCon
   return { draft: next };
 }
 
+/**
+ * Jumps for the saved record. Unedited jumps that signed in like the server
+ * follow it when its sign-in method or key changes (B3). A jump with its own
+ * key (e.g. from ~/.ssh/config) keeps it.
+ */
+function jumpsFor(draft: Draft): JumpSpec[] {
+  const auth = draft.auth as AuthMethod;
+  const keyPath = auth === 'privateKey' ? draft.keyPath : undefined;
+  if (draft.jump.trim() === draft.originalJump.trim()) {
+    return draft.originalJumps.map((item) => {
+      const followed = item.auth === draft.originalAuth && (item.privateKeyPath ?? '') === (draft.originalAuth === 'privateKey' ? draft.originalKeyPath : '');
+      if (!followed) return { ...item };
+      return { ...item, auth, privateKeyPath: keyPath };
+    });
+  }
+  if (!draft.jump.trim()) return [];
+  return parseJumpList(draft.jump).map((item) => ({
+    host: item.host,
+    port: item.port ?? 22,
+    username: item.username || draft.username,
+    auth,
+    privateKeyPath: keyPath,
+  }));
+}
+
 export function toConnection(draft: Draft, id: string): { record: ConnectionRecord; secret: SecretUpdate } {
   if (!draft.auth) throw new Error('Authentication method is missing');
-  let jumps: JumpSpec[];
-  if (draft.jump.trim() === draft.originalJump.trim()) {
-    jumps = draft.originalJumps.map((item) => ({ ...item }));
-  } else if (!draft.jump.trim()) {
-    jumps = [];
-  } else {
-    jumps = parseJumpList(draft.jump).map((item) => ({
-      host: item.host,
-      port: item.port ?? 22,
-      username: item.username || draft.username,
-      auth: draft.auth as AuthMethod,
-      privateKeyPath: draft.auth === 'privateKey' ? draft.keyPath : undefined,
-    }));
-  }
-
+  const askPassword = draft.auth === 'password' && draft.passwordMode === 'ask';
   const record: ConnectionRecord = {
     id,
     name: draft.name,
@@ -481,13 +522,16 @@ export function toConnection(draft: Draft, id: string): { record: ConnectionReco
     auth: draft.auth,
     privateKeyPath: draft.auth === 'privateKey' ? draft.keyPath : undefined,
     startPath: draft.startPath || undefined,
-    jumps,
+    jumps: jumpsFor(draft),
   };
+  if (askPassword) record.askPassword = true;
 
   let secret: SecretUpdate;
-  if (draft.auth === 'agent') secret = { action: 'clear' };
+  if (draft.auth === 'agent' || askPassword) secret = { action: 'clear' };
   else if (draft.auth === 'password') {
-    secret = draft.keepPassword && !draft.password ? { action: 'keep' } : { action: 'set', password: draft.password };
+    if (draft.keepPassword && !draft.password) secret = { action: 'keep' };
+    // An empty password is not stored: Easy SSH asks for it when connecting.
+    else secret = draft.password ? { action: 'set', password: draft.password } : { action: 'clear' };
   } else if (draft.keepPassphrase && !draft.passphrase) secret = { action: 'keep' };
   else secret = { action: 'set', passphrase: draft.passphrase || undefined };
 

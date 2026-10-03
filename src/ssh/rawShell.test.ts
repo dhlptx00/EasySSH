@@ -3,12 +3,45 @@ import { describe, it } from 'node:test';
 import { RawShellTap, normalizeCwd } from './rawShell';
 
 describe('raw shell tap', () => {
-  it('hides the setup echo and forwards the prompt unchanged', () => {
+  it('shows the MOTD and first prompt, then hides only the setup echo (B12)', () => {
     const tap = new RawShellTap();
-    const first = tap.push('if [ -n "$ZSH_VERSION" ]; then echo; fi\r\n\x1b]7;/home/user\x07user@host:~$ ');
-    assert.equal(first.text, 'user@host:~$ ');
+    const motd = 'Welcome to Ubuntu\r\n*** System restart required ***\r\nLast login: Mon\r\n';
+    assert.equal(tap.push(motd).text, motd);
+    assert.equal(tap.push('user@host:~$ ').text, 'user@host:~$ ');
+    assert.equal(tap.promptLike(), true);
+    tap.hide();
+    assert.equal(tap.hiding, true);
+    assert.equal(tap.push(' PROMPT_COMMAND=...; history -d\r\n').text, '');
+    const first = tap.push('\x1b]7;/home/user\x07user@host:~$ ');
+    // The new prompt replaces the one already on screen.
+    assert.equal(first.text, '\r\x1b[Juser@host:~$ ');
     assert.equal(first.cwd, '/home/user');
-    assert.equal(tap.ready, true);
+    assert.equal(tap.hiding, false);
+  });
+
+  it('moves up over a two-line prompt before replacing it', () => {
+    const tap = new RawShellTap();
+    tap.push('┌ user@host ~\r\n└ $ ');
+    tap.hide();
+    const update = tap.push(' hook\r\n\x1b]7;/home/user\x07┌ user@host ~\r\n└ $ ');
+    assert.equal(update.text, '\r\x1b[1A\x1b[J┌ user@host ~\r\n└ $ ');
+  });
+
+  it('does not clear anything when no prompt was on screen yet (slow login)', () => {
+    const tap = new RawShellTap();
+    tap.push('Last login: Mon\r\n');
+    tap.hide();
+    const update = tap.push(' hook\r\n$  hook\r\n\x1b]7;/srv\x07$ ');
+    assert.equal(update.text, '$ ');
+    assert.equal(update.cwd, '/srv');
+  });
+
+  it('keeps mode changes made while the echo was hidden', () => {
+    const tap = new RawShellTap();
+    tap.push('$ ');
+    tap.hide();
+    const update = tap.push('\x1b[?2004l\r hook\r\n\x1b]7;/\x07\x1b[?2004h$ ');
+    assert.equal(update.bracketedPaste, true);
   });
 
   it('keeps carriage returns, color, clears, and control bytes', () => {
@@ -20,7 +53,8 @@ describe('raw shell tap', () => {
 
   it('waits for a directory report split across chunks', () => {
     const tap = new RawShellTap();
-    assert.equal(tap.push('banner\x1b]7;/ho').text, '');
+    tap.hide();
+    assert.equal(tap.push('echo\x1b]7;/ho').text, '');
     const rest = tap.push('me/user\x07$ ');
     assert.equal(rest.cwd, '/home/user');
     assert.equal(rest.text, '$ ');
@@ -42,7 +76,7 @@ describe('raw shell tap', () => {
   it('holds an unfinished private mode until it completes', () => {
     const tap = new RawShellTap();
     const partial = tap.push('\x1b]7;/\x07\x1b[?104');
-    assert.equal(partial.text, '');
+    assert.equal(partial.text, '\x1b]7;/\x07');
     assert.equal(partial.altScreen, false);
     const done = tap.push('9h');
     assert.equal(done.text, '\x1b[?1049h');
@@ -51,6 +85,7 @@ describe('raw shell tap', () => {
 
   it('releases held bytes when the shell never reports a directory', () => {
     const tap = new RawShellTap();
+    tap.hide();
     assert.equal(tap.push('welcome\r\n').text, '');
     const released = tap.release();
     assert.equal(released.text, 'welcome\r\n');

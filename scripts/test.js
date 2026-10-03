@@ -11,7 +11,10 @@ function walk(dir, out = []) {
   return out;
 }
 
-const files = walk(path.join(__dirname, '..', 'src')).sort();
+// `node scripts/test.js` runs the unit tests in src/. Pass a folder to run others,
+// e.g. `node scripts/test.js test/integration` (needs a test sshd, see its Dockerfile).
+const root = path.join(__dirname, '..', process.argv[2] || 'src');
+const files = walk(root).sort();
 // Run tsx's CLI with this same node binary. Spawning `npx` needs a shell on
 // Windows (npx is a .cmd shim) and fails there with ENOENT.
 const tsx = require.resolve('tsx/cli');

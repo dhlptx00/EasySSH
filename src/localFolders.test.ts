@@ -5,8 +5,10 @@ import {
   expandWindowsEnv,
   parseRegDesktop,
   parseXdgDesktop,
+  parseRegValue,
   resolveDesktop,
   resolveDownloadFolder,
+  resolveKnownFolder,
   type FolderProbe,
 } from './localFolders';
 
@@ -20,7 +22,7 @@ function winProbe(folders: Set<string>, answers: Record<string, string | undefin
     home: 'C:\\Users\\hqxrd',
     env,
     exists: (file) => folders.has(file),
-    run: (file, args) => {
+    run: async (file, args) => {
       const key = file === 'reg' ? args[1].split('\\').pop() ?? '' : file;
       calls.push(key);
       return answers[key];
@@ -38,42 +40,42 @@ describe('local Desktop folder', () => {
     assert.equal(expandWindowsEnv('\\\\fs01\\home$\\%username%\\Desktop', env), '\\\\fs01\\home$\\hqxrd\\Desktop');
   });
 
-  it('follows domain folder redirection to a network share', () => {
+  it('follows domain folder redirection to a network share', async () => {
     const redirected = '\\\\fs01\\home$\\hqxrd\\Desktop';
     const probe = winProbe(new Set([redirected]), { 'User Shell Folders': reg('\\\\fs01\\home$\\%USERNAME%\\Desktop') });
-    assert.equal(resolveDesktop(probe), redirected);
+    assert.equal(await resolveDesktop(probe), redirected);
     assert.deepEqual(probe.calls, ['User Shell Folders']);
   });
 
-  it('follows OneDrive folder backup', () => {
+  it('follows OneDrive folder backup', async () => {
     const onedrive = 'C:\\Users\\hqxrd\\OneDrive - LGroup\\Desktop';
     const probe = winProbe(new Set([onedrive, 'C:\\Users\\hqxrd\\Desktop']), { 'User Shell Folders': reg('%OneDrive%\\Desktop') });
-    assert.equal(resolveDesktop(probe), onedrive);
+    assert.equal(await resolveDesktop(probe), onedrive);
   });
 
-  it('asks PowerShell when reg.exe prints a path it cannot decode', () => {
+  it('asks PowerShell when reg.exe prints a path it cannot decode', async () => {
     const chinese = 'D:\\桌面';
     const probe = winProbe(new Set([chinese]), {
       'User Shell Folders': reg('D:\\����', 'REG_SZ'),
       'Shell Folders': reg('D:\\����', 'REG_SZ'),
       'powershell.exe': `${chinese}\r\n`,
     });
-    assert.equal(resolveDesktop(probe), chinese);
+    assert.equal(await resolveDesktop(probe), chinese);
     assert.deepEqual(probe.calls, ['User Shell Folders', 'Shell Folders', 'powershell.exe']);
   });
 
-  it('falls back to %USERPROFILE%\\Desktop with Windows separators on any OS', () => {
+  it('falls back to %USERPROFILE%\\Desktop with Windows separators on any OS', async () => {
     const desktop = 'C:\\Users\\hqxrd\\Desktop';
-    assert.equal(resolveDesktop(winProbe(new Set([desktop]), {})), desktop);
+    assert.equal(await resolveDesktop(winProbe(new Set([desktop]), {})), desktop);
     const have = new Set(['C:\\Users\\hqxrd\\Downloads']);
-    assert.equal(resolveDownloadFolder(undefined, undefined, 'C:\\Users\\hqxrd', (file) => have.has(file)), 'C:\\Users\\hqxrd\\Downloads');
+    assert.equal(resolveDownloadFolder(undefined, {}, 'C:\\Users\\hqxrd', (file) => have.has(file)), 'C:\\Users\\hqxrd\\Downloads');
   });
 
-  it('returns undefined when there is no Desktop, as on some servers', () => {
-    assert.equal(resolveDesktop(winProbe(new Set(), {})), undefined);
+  it('returns undefined when there is no Desktop, as on some servers', async () => {
+    assert.equal(await resolveDesktop(winProbe(new Set(), {})), undefined);
   });
 
-  it('reads the XDG Desktop on Linux', () => {
+  it('reads the XDG Desktop on Linux', async () => {
     assert.equal(parseXdgDesktop('XDG_DESKTOP_DIR="$HOME/桌面"\n', '/home/me'), '/home/me/桌面');
     assert.equal(parseXdgDesktop('XDG_DESKTOP_DIR="$HOME/"\n', '/home/me'), '/home/me/');
     const probe: FolderProbe = {
@@ -81,21 +83,53 @@ describe('local Desktop folder', () => {
       home: '/home/me',
       env: {},
       exists: (file) => file === '/home/me/桌面',
-      run: () => undefined,
+      run: async () => undefined,
       readFile: () => 'XDG_DESKTOP_DIR="$HOME/桌面"',
     };
-    assert.equal(resolveDesktop(probe), '/home/me/桌面');
+    assert.equal(await resolveDesktop(probe), '/home/me/桌面');
   });
 
   it('picks the download folder and labels it', () => {
     const have = new Set(['/home/me/Downloads', '/data/in']);
     const exists = (file: string) => have.has(file);
-    assert.equal(resolveDownloadFolder('/data/in', undefined, '/home/me', exists), '/data/in');
-    assert.equal(resolveDownloadFolder('/gone', undefined, '/home/me', exists), '/home/me/Downloads');
-    assert.equal(resolveDownloadFolder('', '/home/me/Desktop', '/home/me', (file) => file === '/home/me/Desktop'), '/home/me/Desktop');
-    assert.equal(resolveDownloadFolder(undefined, undefined, '/home/me', () => false), '/home/me');
+    assert.equal(resolveDownloadFolder('/data/in', {}, '/home/me', exists), '/data/in');
+    assert.equal(resolveDownloadFolder('/gone', {}, '/home/me', exists), '/home/me/Downloads');
+    assert.equal(resolveDownloadFolder('', { desktop: '/home/me/Desktop' }, '/home/me', (file) => file === '/home/me/Desktop'), '/home/me/Desktop');
+    assert.equal(resolveDownloadFolder(undefined, {}, '/home/me', () => false), '/home/me');
     assert.equal(downloadFolderLabel('/home/me/Desktop', '/home/me/Desktop', '/home/me'), 'the Desktop');
     assert.equal(downloadFolderLabel('/home/me/Downloads', undefined, '/home/me'), '~/Downloads');
     assert.equal(downloadFolderLabel('/data/in', undefined, '/home/me'), '/data/in');
+  });
+
+  it('defaults to Downloads before the Desktop (U12)', () => {
+    const both = new Set(['/home/me/Downloads', '/home/me/Desktop']);
+    assert.equal(resolveDownloadFolder('', { desktop: '/home/me/Desktop' }, '/home/me', (file) => both.has(file)), '/home/me/Downloads');
+    const xdg = new Set(['/home/me/Téléchargements', '/home/me/Desktop']);
+    assert.equal(
+      resolveDownloadFolder('', { downloads: '/home/me/Téléchargements', desktop: '/home/me/Desktop' }, '/home/me', (file) => xdg.has(file)),
+      '/home/me/Téléchargements',
+    );
+  });
+
+  it('finds the Windows Downloads known folder by its GUID, without blocking (B15)', async () => {
+    const guid = '{374DE290-123F-4565-9164-39C4925E467B}';
+    const out = `\r\nHKEY_CURRENT_USER\\...\r\n    ${guid}    REG_EXPAND_SZ    %USERPROFILE%\\Downloads\r\n`;
+    assert.equal(parseRegValue(out, guid), '%USERPROFILE%\\Downloads');
+    const probe = winProbe(new Set(['C:\\Users\\hqxrd\\Downloads']), { 'User Shell Folders': out });
+    const pending = resolveKnownFolder(probe, 'Downloads');
+    assert.ok(pending instanceof Promise);
+    assert.equal(await pending, 'C:\\Users\\hqxrd\\Downloads');
+  });
+
+  it('reads XDG_DOWNLOAD_DIR on Linux', async () => {
+    const probe: FolderProbe = {
+      platform: 'linux',
+      home: '/home/me',
+      env: {},
+      exists: (file) => file === '/home/me/Téléchargements',
+      run: async () => undefined,
+      readFile: () => 'XDG_DESKTOP_DIR="$HOME/Bureau"\nXDG_DOWNLOAD_DIR="$HOME/Téléchargements"\n',
+    };
+    assert.equal(await resolveKnownFolder(probe, 'Downloads'), '/home/me/Téléchargements');
   });
 });

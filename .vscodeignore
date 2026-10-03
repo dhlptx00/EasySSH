@@ -1,4 +1,4 @@
-# Only package.json, README, CHANGELOG, LICENSE, media/ (minus README screenshots) and the bundled dist/extension.js ship.
+# Only package.json, README, CHANGELOG, LICENSE, media/ (minus README screenshots), the bundled dist/extension.js and dist/pagent.exe (Pageant helper for Windows) ship.
 # ssh2 is bundled into dist by esbuild, so node_modules is not needed (vsce.dependencies = false).
 node_modules/**
 src/**
@@ -20,3 +20,5 @@ package-lock.json
 **/*.log
 media/icon.svg
 media/readme/**
+test/**
+eslint.config.mjs

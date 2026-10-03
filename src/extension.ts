@@ -7,10 +7,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('Easy SSH');
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   status.command = 'easySsh.open';
-  status.show();
   const store = new ConnectionStore(context.globalState, context.secrets);
   const controller = new EasySshController(store, output, status);
   const sidebar = new EasySshSidebar(controller);
+  void controller.init();
 
   context.subscriptions.push(
     output,
@@ -22,6 +22,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('easySsh.newTerminal', () => controller.newTerminal()),
     vscode.commands.registerCommand('easySsh.setDownloadFolder', () => controller.setDownloadFolder()),
     vscode.commands.registerCommand('easySsh.resetHostKeys', () => controller.resetHostKeys()),
+    vscode.commands.registerCommand('easySsh.cancelTransfer', () => controller.cancelTransfer()),
     vscode.window.registerTerminalLinkProvider(controller),
     vscode.window.onDidCloseTerminal((terminal) => controller.onClosed(terminal)),
   );

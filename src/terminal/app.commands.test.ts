@@ -39,7 +39,6 @@ function host(records: ConnectionRecord[] = [record]): AppHost {
     home: () => '/Users/me',
     chooseDownloadFolder: async () => undefined,
     classifyDrop: () => null,
-    localDownloadPath: (name) => name,
     keyExists: () => true,
     setStatus: () => {},
     log: () => {},

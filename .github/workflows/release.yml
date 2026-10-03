@@ -1,0 +1,94 @@
+name: Release
+
+# Push a tag vX.Y.Z (matching package.json) to build the VSIX, publish it to
+# Open VSX and attach it to a GitHub Release. Every step is idempotent: a version
+# already on Open VSX is not published again, and an existing Release only gets a
+# missing VSIX attached. The VS Code Marketplace upload stays manual.
+# Needs the repository secret OVSX_TOKEN (an Open VSX access token).
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release, e.g. v0.2.1
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check the tag matches package.json
+        id: meta
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match package.json version $VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "vsix=easy-ssh-$VERSION.vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck, lint, test
+        run: |
+          npm run check
+          npm run lint
+          npm test
+
+      - name: Package
+        run: npx @vscode/vsce package --no-dependencies --out "${{ steps.meta.outputs.vsix }}"
+
+      - name: Publish to Open VSX (skipped when the version is already there)
+        env:
+          OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' "https://open-vsx.org/api/easy-ssh/easy-ssh/$VERSION")
+          if [ "$status" = "200" ]; then
+            echo "easy-ssh.easy-ssh $VERSION is already on Open VSX; not publishing again."
+            exit 0
+          fi
+          if [ -z "$OVSX_TOKEN" ]; then
+            echo "::error::The OVSX_TOKEN secret is not set"
+            exit 1
+          fi
+          npx --yes ovsx publish "${{ steps.meta.outputs.vsix }}" -p "$OVSX_TOKEN"
+
+      - name: GitHub Release (created, or the VSIX attached when missing)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VSIX: ${{ steps.meta.outputs.vsix }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$VSIX"; then
+              echo "Release $TAG already has $VSIX."
+            else
+              gh release upload "$TAG" "$VSIX"
+            fi
+          else
+            notes=$(awk -v v="$VERSION" '$0 ~ "^## \\[?"v"\\]?" {on=1; next} /^## / && on {exit} on' CHANGELOG.md)
+            gh release create "$TAG" "$VSIX" --title "Easy SSH $VERSION" --notes "${notes:-See CHANGELOG.md}"
+          fi

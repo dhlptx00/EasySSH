@@ -50,6 +50,7 @@ const FG: Record<Tone, string> = {
 };
 
 // Read from package.json at build time (esbuild inlines it), so the header never goes stale.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const VERSION: string = (require('../../package.json') as { version: string }).version;
 const PROMPT_BLOCK = 3;
 const FRAME_GAP = 1;
@@ -183,18 +184,66 @@ function renderPanel(screen: Exclude<Screen, { kind: 'connections' }>, view: Ren
     content = pickCard(screen, contentWidth, budget);
     input = { text: 'Enter to confirm', editable: false, meta: '' };
   } else if (screen.kind === 'trust') {
+    const q = screen.question;
+    const changed = q.kind === 'changed';
     content = [
       blank(contentWidth),
-      paintPieces([{ text: 'Host key changed', bold: true }], contentWidth),
-      paintPieces([{ text: truncate(screen.hostLabel, contentWidth), tone: 'muted' }], contentWidth),
-      paintPieces([{ text: truncate(formatFingerprint(screen.fingerprint), contentWidth), tone: 'blue' }], contentWidth),
-      blank(contentWidth),
-      paintPieces([{ text: truncate('This does not match the key saved for this server.', contentWidth), tone: 'muted' }], contentWidth),
-      blank(contentWidth),
-      ...choiceRows(['No, disconnect', 'Yes, trust this key'], screen.choice, contentWidth),
+      paintPieces([{ text: changed ? 'Host key changed' : 'New server: check its host key', bold: true, tone: changed ? 'red' : 'text' }], contentWidth),
+      paintPieces([{ text: truncate(q.via ? `${q.hostLabel} via ${q.via}` : q.hostLabel, contentWidth), tone: 'muted' }], contentWidth),
       blank(contentWidth),
     ];
-    input = { text: 'Enter to confirm', editable: false, meta: '' };
+    if (changed && q.previous) {
+      content.push(
+        paintPieces([{ text: 'saved  ', tone: 'muted' }, { text: truncate(formatFingerprint(q.previous), contentWidth - 7), tone: 'muted' }], contentWidth),
+        paintPieces([{ text: 'now    ', tone: 'muted' }, { text: truncate(formatFingerprint(q.fingerprint), contentWidth - 7), tone: 'blue' }], contentWidth),
+      );
+    } else {
+      content.push(paintPieces([{ text: truncate(formatFingerprint(q.fingerprint), contentWidth), tone: 'blue' }], contentWidth));
+    }
+    content.push(
+      blank(contentWidth),
+      paintPieces([{
+        text: truncate(changed
+          ? 'This is not the key saved for this server. It may have been reinstalled, or someone may be intercepting the connection.'
+          : 'Compare it with the server (ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub) or ask its admin.', contentWidth),
+        tone: 'muted',
+      }], contentWidth),
+      blank(contentWidth),
+      ...choiceRows(['No, disconnect', changed ? 'Yes, trust the new key' : 'Yes, trust and connect'], screen.choice, contentWidth),
+      blank(contentWidth),
+    );
+    input = { text: 'Enter to confirm · y / n', editable: false, meta: '' };
+  } else if (screen.kind === 'ask') {
+    const request = screen.request;
+    content = [
+      blank(contentWidth),
+      paintPieces([{ text: truncate(request.title, contentWidth), bold: true }], contentWidth),
+      paintPieces([{ text: truncate(screen.label, contentWidth), tone: 'muted' }], contentWidth),
+    ];
+    for (const line of (request.detail ?? '').split(/\r?\n/).filter(Boolean).slice(0, 6)) {
+      content.push(paintPieces([{ text: truncate(line, contentWidth), tone: 'primary' }], contentWidth));
+    }
+    content.push(blank(contentWidth));
+    if (request.save !== undefined) {
+      content.push(paintPieces([{ text: screen.save ? '[x] ' : '[ ] ', tone: 'primary' }, { text: 'Save the password in the editor secret storage' }], contentWidth));
+      content.push(blank(contentWidth));
+    }
+    if (request.hint) content.push(paintPieces([{ text: truncate(request.hint, contentWidth), tone: 'muted' }], contentWidth), blank(contentWidth));
+    const shown = request.masked ? '•'.repeat([...screen.input].length) : screen.input;
+    input = { text: shown, editable: true, meta: '' };
+    anchor = 'end';
+  } else if (screen.kind === 'lost') {
+    content = [
+      blank(contentWidth),
+      paintPieces([{ text: truncate(`Connection to ${screen.name} lost`, contentWidth), bold: true }], contentWidth),
+      paintPieces([{ text: truncate(screen.reason, contentWidth), tone: 'red' }], contentWidth),
+      blank(contentWidth),
+    ];
+    if (screen.retryIn !== undefined) {
+      content.push(paintPieces([{ text: truncate(`Reconnecting in ${screen.retryIn} s…`, contentWidth), tone: 'primary' }], contentWidth), blank(contentWidth));
+    }
+    content.push(...choiceRows(['Reconnect', 'Back to the list'], screen.choice, contentWidth), blank(contentWidth));
+    input = { text: 'Enter: choose · Esc: list', editable: false, meta: '' };
   } else if (screen.kind === 'wizard') {
     content = wizardCard(screen, contentWidth, budget);
     const prompt = promptFor(screen.step, screen.draft);
@@ -221,7 +270,7 @@ export function sessionHint(click = 'Click'): { plain: string; styled: string } 
   const reset = '\x1b[0m';
   const parts = [
     { text: click, color: gold },
-    { text: 'a file name to download', color: dim },
+    { text: 'a file or folder name to download it', color: dim },
     { text: '·', color: dim },
     { text: 'drag files to upload', color: dim },
     { text: '·', color: dim },
@@ -278,7 +327,7 @@ export function nameSpans(plain: string, entries: BrowseEntry[], downloadLabel =
           length: entry.name.length,
           remotePath: entry.path,
           kind,
-          tooltip: kind === 'dir' ? `cd ${entry.name}` : `Download ${entry.name} to ${downloadLabel}`,
+          tooltip: kind === 'dir' ? `Download folder ${entry.name} to ${downloadLabel}` : `Download ${entry.name} to ${downloadLabel}`,
         });
       }
       from = at + Math.max(1, entry.name.length);

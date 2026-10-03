@@ -1,4 +1,4 @@
-import { execFileSync } from 'child_process';
+import { execFile } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -9,8 +9,8 @@ export interface FolderProbe {
   home: string;
   env: NodeJS.ProcessEnv;
   exists(file: string): boolean;
-  /** Run a program and return its stdout, or undefined when it fails. */
-  run(file: string, args: string[]): string | undefined;
+  /** Run a program and return its stdout, or undefined when it fails. Never blocks the extension host (B15). */
+  run(file: string, args: string[]): Promise<string | undefined>;
   readFile(file: string): string | undefined;
 }
 
@@ -23,60 +23,92 @@ export function expandWindowsEnv(value: string, env: NodeJS.ProcessEnv): string 
   return value.replace(/%([^%]+)%/g, (whole, name: string) => lower.get(name.toLowerCase()) ?? whole);
 }
 
-/** The Desktop value from `reg query ... /v Desktop` output. */
-export function parseRegDesktop(output: string | undefined): string | undefined {
+export type KnownFolder = 'Desktop' | 'Downloads';
+
+/** Registry value names in User Shell Folders. Downloads has only a GUID. */
+const REG_VALUE: Record<KnownFolder, string> = {
+  Desktop: 'Desktop',
+  Downloads: '{374DE290-123F-4565-9164-39C4925E467B}',
+};
+
+const XDG_KEY: Record<KnownFolder, string> = { Desktop: 'XDG_DESKTOP_DIR', Downloads: 'XDG_DOWNLOAD_DIR' };
+
+const POWERSHELL: Record<KnownFolder, string> = {
+  Desktop: "[Environment]::GetFolderPath('Desktop')",
+  Downloads: "(New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path",
+};
+
+/** A value from `reg query ... /v <name>` output. */
+export function parseRegValue(output: string | undefined, name: string): string | undefined {
   if (!output) return undefined;
-  const match = /^\s*Desktop\s+REG_(?:EXPAND_)?SZ\s+(.+?)\s*$/im.exec(output);
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`^\\s*${escaped}\\s+REG_(?:EXPAND_)?SZ\\s+(.+?)\\s*$`, 'im').exec(output);
   return match?.[1];
 }
 
-/** XDG_DESKTOP_DIR from ~/.config/user-dirs.dirs, e.g. "$HOME/桌面". */
-export function parseXdgDesktop(content: string | undefined, home: string): string | undefined {
+/** The Desktop value from `reg query ... /v Desktop` output. */
+export function parseRegDesktop(output: string | undefined): string | undefined {
+  return parseRegValue(output, 'Desktop');
+}
+
+/** An XDG user dir from ~/.config/user-dirs.dirs, e.g. "$HOME/桌面". */
+export function parseXdgDir(content: string | undefined, home: string, key: string): string | undefined {
   if (!content) return undefined;
-  const match = /^\s*XDG_DESKTOP_DIR\s*=\s*"([^"]*)"\s*$/m.exec(content);
+  const match = new RegExp(`^\\s*${key}\\s*=\\s*"([^"]*)"\\s*$`, 'm').exec(content);
   if (!match) return undefined;
   const value = match[1].replace(/^\$HOME(?=\/|$)/, home).replace(/^\$\{HOME\}(?=\/|$)/, home);
   if (!value.startsWith('/') || value === home) return undefined;
   return value;
 }
 
+/** XDG_DESKTOP_DIR from ~/.config/user-dirs.dirs, e.g. "$HOME/桌面". */
+export function parseXdgDesktop(content: string | undefined, home: string): string | undefined {
+  return parseXdgDir(content, home, 'XDG_DESKTOP_DIR');
+}
+
 /**
- * The user's real Desktop folder.
+ * The user's real Desktop or Downloads folder.
  * Windows: the registry value Explorer uses, which follows folder redirection
  * (for example \\server\share\user\Desktop on a domain) and OneDrive backup;
  * then PowerShell's known-folder lookup, which also handles non-ASCII paths that
- * reg.exe prints in the console code page. Linux: XDG user dirs. Otherwise ~/Desktop.
- * Returns undefined when no Desktop folder exists.
+ * reg.exe prints in the console code page. Linux: XDG user dirs. Otherwise ~/Desktop
+ * or ~/Downloads. Returns undefined when the folder does not exist.
  */
-export function resolveDesktop(probe: FolderProbe): string | undefined {
+export async function resolveKnownFolder(probe: FolderProbe, folder: KnownFolder): Promise<string | undefined> {
   const paths = probe.platform === 'win32' ? path.win32 : path.posix;
-  const candidates: (() => string | undefined)[] = [];
+  const candidates: (() => Promise<string | undefined> | string | undefined)[] = [];
   if (probe.platform === 'win32') {
-    candidates.push(() => {
-      const raw = parseRegDesktop(probe.run('reg', ['query', USER_SHELL_FOLDERS, '/v', 'Desktop']));
+    const value = REG_VALUE[folder];
+    candidates.push(async () => {
+      const raw = parseRegValue(await probe.run('reg', ['query', USER_SHELL_FOLDERS, '/v', value]), value);
       return raw ? expandWindowsEnv(raw, probe.env) : undefined;
     });
-    candidates.push(() => parseRegDesktop(probe.run('reg', ['query', SHELL_FOLDERS, '/v', 'Desktop'])));
-    candidates.push(() => probe.run('powershell.exe', [
+    candidates.push(async () => parseRegValue(await probe.run('reg', ['query', SHELL_FOLDERS, '/v', value]), value));
+    candidates.push(async () => (await probe.run('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      "[Console]::OutputEncoding=[Text.Encoding]::UTF8; [Environment]::GetFolderPath('Desktop')",
-    ])?.trim() || undefined);
+      `[Console]::OutputEncoding=[Text.Encoding]::UTF8; ${POWERSHELL[folder]}`,
+    ]))?.trim() || undefined);
   } else if (probe.platform === 'linux') {
-    candidates.push(() => parseXdgDesktop(probe.readFile(paths.join(probe.home, '.config', 'user-dirs.dirs')), probe.home));
+    candidates.push(() => parseXdgDir(probe.readFile(paths.join(probe.home, '.config', 'user-dirs.dirs')), probe.home, XDG_KEY[folder]));
   }
-  candidates.push(() => paths.join(probe.home, 'Desktop'));
+  candidates.push(() => paths.join(probe.home, folder));
   for (const candidate of candidates) {
     let found: string | undefined;
     try {
-      found = candidate();
+      found = await candidate();
     } catch {
       found = undefined;
     }
     if (found && probe.exists(found)) return found;
   }
   return undefined;
+}
+
+/** The user's real Desktop folder (see resolveKnownFolder). */
+export function resolveDesktop(probe: FolderProbe): Promise<string | undefined> {
+  return resolveKnownFolder(probe, 'Desktop');
 }
 
 export function systemProbe(): FolderProbe {
@@ -91,13 +123,13 @@ export function systemProbe(): FolderProbe {
         return false;
       }
     },
-    run: (file, args) => {
+    run: (file, args) => new Promise((resolve) => {
       try {
-        return execFileSync(file, args, { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        execFile(file, args, { encoding: 'utf8', timeout: 5000, windowsHide: true }, (err, stdout) => resolve(err ? undefined : stdout));
       } catch {
-        return undefined;
+        resolve(undefined);
       }
-    },
+    }),
     readFile: (file) => {
       try {
         return fs.readFileSync(file, 'utf8');
@@ -108,13 +140,18 @@ export function systemProbe(): FolderProbe {
   };
 }
 
+export interface SystemFolders {
+  downloads?: string;
+  desktop?: string;
+}
+
 /**
- * Where downloads go: the configured folder when it exists, then the Desktop,
- * then Downloads, then the home folder.
+ * Where downloads go: the configured folder when it exists, then Downloads,
+ * then the Desktop, then the home folder. (Before 0.2.0 the Desktop came first.)
  */
 export function resolveDownloadFolder(
   configured: string | undefined,
-  desktop: string | undefined,
+  folders: SystemFolders,
   home: string,
   exists: (file: string) => boolean,
 ): string {
@@ -122,9 +159,10 @@ export function resolveDownloadFolder(
     const expanded = expandHome(configured.trim(), home);
     if (exists(expanded)) return expanded;
   }
-  if (desktop && exists(desktop)) return desktop;
+  if (folders.downloads && exists(folders.downloads)) return folders.downloads;
   const downloads = localJoin(home, 'Downloads');
   if (exists(downloads)) return downloads;
+  if (folders.desktop && exists(folders.desktop)) return folders.desktop;
   return home;
 }
 

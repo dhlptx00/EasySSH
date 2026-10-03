@@ -22,9 +22,9 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         node: [20, 22]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -35,6 +35,9 @@ jobs:
       - name: Typecheck
         run: npm run check
 
+      - name: Lint
+        run: npm run lint
+
       - name: Test
         run: npm test
 
@@ -44,8 +47,45 @@ jobs:
 
       - name: Upload VSIX
         if: matrix.os == 'ubuntu-latest' && matrix.node == 22
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vsix
           path: '*.vsix'
           if-no-files-found: error
+
+  integration:
+    name: integration (real sshd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Start a throwaway sshd container
+        run: |
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/it_key"
+          docker build -t easyssh-it test/integration
+          docker run -d --name easyssh-it -p 127.0.0.1:2222:22 -e AUTHORIZED_KEY="$(cat "$RUNNER_TEMP/it_key.pub")" easyssh-it
+          for i in $(seq 1 30); do
+            if ssh-keyscan -p 2222 127.0.0.1 >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          docker logs easyssh-it
+          exit 1
+
+      - name: Integration tests
+        env:
+          EASYSSH_IT_PORT: '2222'
+          EASYSSH_IT_INNER_PORT: '22'
+          EASYSSH_IT_KEY: ${{ runner.temp }}/it_key
+        run: npm run test:integration
+
+      - name: Server log
+        if: failure()
+        run: docker logs easyssh-it || true

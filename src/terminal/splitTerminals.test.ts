@@ -108,7 +108,7 @@ describe('two Easy SSH terminals on one server after sudo su (split view)', () =
     right.dispose();
   });
 
-  it('follows a Ctrl+click on a folder in the root shell, and the hook again after exit', async () => {
+  it('downloads a folder Ctrl+clicked in the root shell without typing into it, and follows the hook again after exit', async () => {
     const remote = fakeRemote({ name: 'Var', tree: server() });
     const app = await connected(remote, '/home/hqxrd/rocky10.1/redis');
     await type(app, remote, 'sudo su');
@@ -117,12 +117,12 @@ describe('two Easy SSH terminals on one server after sudo su (split view)', () =
     const line = 'ap  phpl  xy';
     const ap = app.linkFor(line).find((link) => link.remotePath === '/www/ap');
     assert.ok(ap, 'the /www listing is linked in the root shell');
+    assert.match(ap.tooltip, /^Download folder ap to /);
+    const before = remote.written.length;
     app.activatePath('/www/ap');
     await flush();
-    assert.equal(remote.written.at(-1), "cd '/www/ap'\n");
-    remote.push('\r\n[root@web ap]# ');
-    await settle();
-    assert.equal(linkNames(app, LISTING).length, 7);
+    assert.equal(remote.written.length, before, 'nothing is typed into the shell');
+    assert.deepEqual(remote.downloads.map((item) => [item.remotePath, item.kind, item.name]), [['/www/ap', 'folder', 'ap']]);
     await type(app, remote, 'exit', '');
     remote.push('\x1b]7;/home/hqxrd/rocky10.1/redis\x07[hqxrd@web redis]$ ');
     await flush();

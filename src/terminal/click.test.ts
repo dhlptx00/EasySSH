@@ -21,7 +21,7 @@ const files: BrowseEntry[] = [
 ];
 
 describe('plain click (easySsh.plainClick)', () => {
-  it('downloads a file, cds a directory, and ignores a drag', async () => {
+  it('downloads a file or a whole folder, and ignores a drag', async () => {
     const written: string[] = [];
     const downloads: string[] = [];
     const scrolls: string[] = [];
@@ -53,13 +53,14 @@ describe('plain click (easySsh.plainClick)', () => {
     click(app, 1, 1);
     click(app, 5, 1);
     await flush();
-    assert.deepEqual(written, ["cd '/root/tmp'\n"]);
-    assert.deepEqual(downloads, ['/root/notes.txt']);
+    // A folder click downloads the folder; it never types cd.
+    assert.deepEqual(written, []);
+    assert.deepEqual([...downloads].sort(), ['/root/notes.txt', '/root/tmp/']);
 
     push?.('\x1b[?1049h');
     click(app, 15, 1);
     await flush();
-    assert.deepEqual(downloads, ['/root/notes.txt']);
+    assert.deepEqual([...downloads].sort(), ['/root/notes.txt', '/root/tmp/']);
     assert.match(written.join(''), /\x1b\[</);
 
     push?.('\x1b[?1000l\x1b[?1049l');
@@ -70,7 +71,7 @@ describe('plain click (easySsh.plainClick)', () => {
 
     click(app, 15, 1);
     await flush();
-    assert.deepEqual(downloads, ['/root/notes.txt', '/root/other.txt']);
+    assert.deepEqual([...downloads].sort(), ['/root/notes.txt', '/root/other.txt', '/root/tmp/']);
   });
 });
 
@@ -96,15 +97,20 @@ describe('Ctrl+click links (default)', () => {
     push?.('tmp notes.txt other.txt\r\n');
     const output = shown.join('');
     assert.doesNotMatch(output, /\x1b\[\?100[0-3]h/);
-    assert.match(output.replace(/\x1b\[[0-9;]*m/g, ''), /Ctrl\+click a file name to download/);
+    assert.match(output.replace(/\x1b\[[0-9;]*m/g, ''), /Ctrl\+click a file or folder name to download it/);
 
     // Names still open through the terminal link provider.
     const links = app.linkFor('tmp notes.txt other.txt');
     assert.deepEqual(links.map((link) => link.remotePath), ['/root/notes.txt', '/root/other.txt', '/root/tmp']);
     assert.match(links[0].tooltip, /to ~\/Desktop$/);
+    assert.match(links[2].tooltip, /^Download folder tmp to ~\/Desktop$/);
     app.activatePath('/root/notes.txt');
     await flush();
     assert.deepEqual(downloads, ['/root/notes.txt']);
+    app.activatePath('/root/tmp');
+    await flush();
+    assert.deepEqual(downloads, ['/root/notes.txt', '/root/tmp/']);
+    assert.deepEqual(written, []);
   });
 
   it('gives mouse reports to the remote program that asked for them', async () => {
@@ -163,10 +169,15 @@ function host(
   const session: FileSession = {
     list: async () => files,
     resolve: async () => ({ path: '/root', kind: 'dir' }),
-    download: async (remotePath) => {
+    download: async (remotePath, folder, name) => {
       downloads.push(remotePath);
+      return { localPath: `${folder}/${name}`, bytes: 4, grew: false };
     },
-    upload: async () => ({ uploaded: 0, skipped: 0 }),
+    downloadFolder: async (remotePath, folder, name) => {
+      downloads.push(`${remotePath}/`);
+      return { localPath: `${folder}/${name}`, files: 1, folders: 1, bytes: 4, skipped: [] };
+    },
+    upload: async () => ({ uploaded: 0, skipped: 0, kept: 0, renamed: [] }),
     openShell: async (_columns, _rows, onData) => {
       shell = true;
       capture(onData);
@@ -186,12 +197,11 @@ function host(
     deleteConnection: async () => {},
     secretFlags: async () => ({ password: false, passphrase: false }),
     importConfig: async () => ({ ok: true, message: 'Imported 1' }),
-    connect: async () => ({ session, cwd: '/root', trustedNewKey: false, usedFallbackPath: false }),
+    connect: async () => ({ session, cwd: '/root', usedFallbackPath: false }),
     downloadFolder: () => '/Users/me/Desktop',
     home: () => '/Users/me',
     chooseDownloadFolder: async () => undefined,
     classifyDrop: () => null,
-    localDownloadPath: (name) => name,
     keyExists: () => true,
     setStatus: () => {},
     log: () => {},
