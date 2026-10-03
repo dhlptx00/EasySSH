@@ -43,3 +43,46 @@ describe('package.json', () => {
     assert.doesNotMatch(settings, /\bcd\b|change directory|enter (the )?folder/i);
   });
 });
+
+describe('listing and docs (L1–L9)', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as {
+    version: string;
+    displayName: string;
+    description: string;
+    keywords: string[];
+    galleryBanner?: { color: string; theme: string };
+    qna?: string;
+    activationEvents?: string[];
+  };
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+
+  it('has listing metadata within Marketplace limits', () => {
+    assert.ok(pkg.keywords.length >= 10 && pkg.keywords.length <= 30, `${pkg.keywords.length} keywords`);
+    assert.equal(new Set(pkg.keywords.map((k) => k.toLowerCase())).size, pkg.keywords.length);
+    assert.match(pkg.displayName, /SSH/);
+    assert.ok(pkg.description.length <= 200);
+    assert.equal(pkg.galleryBanner?.theme, 'dark');
+    assert.match(pkg.qna ?? '', /^https:\/\/github\.com\/.+\/discussions$/);
+    assert.equal(pkg.activationEvents, undefined, 'contributed views and commands activate the extension');
+  });
+
+  it('documents the current version in the CHANGELOG with a date', () => {
+    assert.match(changelog, new RegExp(`^## \\[${pkg.version.replace(/\./g, '\\.')}\\] - \\d{4}-\\d{2}-\\d{2}$`, 'm'));
+    assert.match(changelog, new RegExp(`^\\[${pkg.version.replace(/\./g, '\\.')}\\]: https://`, 'm'));
+  });
+
+  it('references only images that exist and never describes click-to-cd', () => {
+    const images = [...readme.matchAll(/\]\((media\/readme\/[^)]+)\)/g)].map((match) => match[1]);
+    assert.ok(images.length >= 15);
+    for (const image of images) assert.ok(fs.existsSync(path.join(root, image)), `${image} is missing`);
+    assert.doesNotMatch(readme, /click(?:ing)? (?:a |the )?(?:folder|directory)[^.\n]*\bcd\b|`cd` into/i);
+    assert.doesNotMatch(readme, /Download[^\n]*to the Desktop \(/);
+  });
+
+  it('documents every setting', () => {
+    for (const key of Object.keys(manifest.contributes.configuration.properties)) {
+      assert.ok(readme.includes(`\`${key}\``), `${key} is not in the README settings table`);
+    }
+  });
+});

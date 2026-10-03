@@ -1,11 +1,16 @@
 {
   "name": "easy-ssh",
-  "displayName": "Easy SSH",
-  "description": "Manage SSH connections in a terminal and transfer files with the remote directory you are in. Works in VS Code and Cursor, on internal and external networks.",
-  "version": "0.1.4",
+  "displayName": "Easy SSH – SSH Client & SFTP Drag-and-Drop",
+  "description": "SSH client in a VS Code / Cursor terminal tab: saved hosts, jump hosts, ~/.ssh/config import, Ctrl+click a file or folder to download, drag and drop to upload (SFTP). Nothing to install on servers.",
+  "version": "0.2.0",
   "publisher": "easy-ssh",
   "license": "MIT",
   "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
+  "pricing": "Free",
   "repository": {
     "type": "git",
     "url": "https://github.com/dhlptx00/EasySSH.git"
@@ -13,6 +18,7 @@
   "bugs": {
     "url": "https://github.com/dhlptx00/EasySSH/issues"
   },
+  "qna": "https://github.com/dhlptx00/EasySSH/discussions",
   "homepage": "https://github.com/dhlptx00/EasySSH#readme",
   "sponsor": {
     "url": "https://buymeacoffee.com/dhlptx00"
@@ -26,20 +32,32 @@
   "keywords": [
     "ssh",
     "sftp",
+    "ssh client",
+    "terminal",
+    "ssh terminal",
+    "jump host",
+    "bastion",
+    "proxyjump",
+    "ssh config",
+    "scp",
+    "file transfer",
+    "drag and drop",
     "upload",
     "download",
     "remote",
+    "remote server",
+    "sysadmin",
+    "devops",
+    "putty",
+    "termius",
+    "mobaxterm",
+    "remote-ssh alternative",
     "cursor"
   ],
   "extensionKind": [
     "ui"
   ],
   "main": "./dist/extension.js",
-  "activationEvents": [
-    "onCommand:easySsh.open",
-    "onCommand:easySsh.newTerminal",
-    "onView:easySsh.sidebar"
-  ],
   "capabilities": {
     "virtualWorkspaces": true,
     "untrustedWorkspaces": {
