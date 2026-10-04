@@ -344,6 +344,17 @@ describe('terminal screen', () => {
       assert.equal(short.lines.length, 16);
     });
 
+    it('keeps only list rows when the slash menu leaves a tiny card', () => {
+      const frame = render({ ...screen, command: '/' }, { ...view, cols: 110, rows: 26 });
+      const top = frame.lines.findIndex((line) => line.plain.includes('╭'));
+      const bottom = frame.lines.findIndex((line, index) => index > top && line.plain.includes('╰'));
+      const card = frame.lines.slice(top + 1, bottom).map((line) => line.plain).join('\n');
+      assert.ok(bottom - top - 1 <= 4, 'the card is small');
+      assert.match(card, /› prod-web/);
+      assert.match(card, /staging-db/);
+      assert.doesNotMatch(card, /Last:|Easy SSH/);
+    });
+
     it('shows Getting started on an empty list', () => {
       const shown = text(render({ kind: 'connections', items: [], selected: 0, command: '', pick: 0 }, { ...view, rows: 30 }));
       assert.match(shown, /Getting started/);

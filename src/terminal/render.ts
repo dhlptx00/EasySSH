@@ -354,7 +354,8 @@ function deleteCard(screen: Extract<Screen, { kind: 'confirm' }>): Omit<PanelLay
     { pieces: [{ text: 'Host      ', tone: 'muted' }, { text: item.userHost, bold: true }] },
     { pieces: [{ text: 'Sign-in   ', tone: 'muted' }, { text: authWord(item), tone: authTone(item) }, { text: item.via ? ` via ${item.via}` : '', tone: 'muted' }] },
     blankRow(),
-    textRow('This removes the saved connection and its stored password or passphrase. It cannot be undone.', 'muted'),
+    textRow('This removes the saved connection and its stored password or passphrase.', 'muted'),
+    textRow('It cannot be undone.', 'muted'),
   ];
   const note = noticeRow(screen.notice);
   if (note) rows.push(note);
@@ -1061,7 +1062,9 @@ function renderHome(screen: Extract<Screen, { kind: 'connections' }>, view: Rend
     const extras = extraTiers.find((tier) => inner.length + tier.length + 1 <= maxInner) ?? [];
     inner = spreadHome(brand, note, table, extras, footer, maxInner);
   } else {
-    inner = squeeze(inner, maxInner);
+    // A card squeezed by the slash menu shows only rows of the list, not half a brand mark.
+    const tiny = table.length > 0 && maxInner < brand.length + 3;
+    inner = squeeze(tiny ? tableFor(screen.items.length).filter((row) => !row.optional) : inner, maxInner);
     while (inner.length < maxInner) inner.push(blankRow());
   }
 
