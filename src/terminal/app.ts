@@ -41,14 +41,11 @@ import { SUMMARY_ACTIONS, type ConnectionItem, type Screen } from './screen';
 import {
   colorCode,
   DEFAULT_THEME,
-  nextThemeChoice,
-  resolveThemeKind,
   SESSION_COLOR_RESET,
   oscColor,
-  paletteOn,
+  paletteFor,
   sessionColorSequence,
   sessionColorsFor,
-  themeLabel,
   type PaintTheme,
 } from './theme';
 import {
@@ -693,14 +690,11 @@ export class EasySshApp {
       case 'folder':
         await this.pickFolder();
         return;
-      case 'theme':
-        await this.cycleTheme();
-        return;
       case 'quit':
         this.host.quit();
         return;
       case 'help':
-        this.showNotice('info', 'Commands: /new, /edit, /delete, /import, /folder, /theme, /quit. A connection name connects directly.');
+        this.showNotice('info', 'Commands: /new, /edit, /delete, /import, /folder, /quit. A connection name connects directly.');
         return;
       default: {
         const unreachable: never = action;
@@ -999,19 +993,7 @@ export class EasySshApp {
     }
   }
 
-  /** /theme: Auto → Dark → Light → Auto. */
-  private async cycleTheme(): Promise<void> {
-    const state = this.host.theme?.();
-    if (!state || !this.host.setTheme) {
-      this.showNotice('info', 'Themes are not available here');
-      return;
-    }
-    const next = nextThemeChoice(state.choice);
-    await this.host.setTheme(next);
-    this.showNotice('ok', `Theme: ${themeLabel(next, state.editorKind)}. /theme again for the next one`);
-  }
-
-  /** Redraw after the theme, the VS Code theme kind, or the color depth changed. */
+  /** Redraw after VS Code's theme kind, the color depth or easySsh.themeSession changed. */
   refreshTheme(): void {
     if (this.closed) return;
     if (this.raw) {
@@ -1026,7 +1008,7 @@ export class EasySshApp {
   private paintTheme(): PaintTheme {
     const state = this.host.theme?.();
     if (!state) return DEFAULT_THEME;
-    return { palette: paletteOn(resolveThemeKind(state.choice, state.editorKind), state.editorKind), depth: state.depth };
+    return { palette: paletteFor(state.editorKind), depth: state.depth };
   }
 
   private onShellChunk(chunk: string): void {
@@ -1301,8 +1283,7 @@ export class EasySshApp {
       return reset;
     }
     this.sessionPainted = true;
-    const kind = resolveThemeKind(state.choice, state.editorKind);
-    return sessionColorSequence(sessionColorsFor(kind, paletteOn(kind, state.editorKind)));
+    return sessionColorSequence(sessionColorsFor(state.editorKind));
   }
 
   /** Show bytes in the terminal and keep a copy for click hit-testing. */

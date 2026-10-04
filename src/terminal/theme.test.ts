@@ -6,16 +6,11 @@ import {
   editorThemeKind,
   hex,
   LIGHT,
-  nextThemeChoice,
   paletteFor,
-  paletteOn,
   parseColorDepth,
-  parseThemeChoice,
-  resolveThemeKind,
   SESSION_COLOR_RESET,
   sessionColorSequence,
   sessionColorsFor,
-  themeLabel,
   to16,
   to256,
   type Rgb,
@@ -34,41 +29,19 @@ function contrast(a: Rgb, b: Rgb): number {
 }
 
 describe('Easy SSH palettes', () => {
-  it('follows VS Code in Auto and ignores it in Dark and Light', () => {
-    assert.equal(resolveThemeKind('auto', 'light'), 'light');
-    assert.equal(resolveThemeKind('auto', 'dark'), 'dark');
-    assert.equal(resolveThemeKind('dark', 'light'), 'dark');
-    assert.equal(resolveThemeKind('light', 'dark'), 'light');
+  it('follows the kind of VS Code theme: light and high-contrast light get Light', () => {
     assert.equal(paletteFor('light'), LIGHT);
     assert.equal(paletteFor('dark'), DARK);
-  });
-
-  it('gives a forced palette its own background when VS Code is the other kind', () => {
-    assert.equal(paletteOn('dark', 'dark'), DARK);
-    assert.equal(paletteOn('light', 'light'), LIGHT);
-    assert.deepEqual(paletteOn('light', 'dark').panel, hex('#FFFFFF'));
-    assert.deepEqual(paletteOn('dark', 'light').panel, hex('#1F1F1F'));
-  });
-
-  it('maps VS Code theme kinds: light and high-contrast light are light', () => {
     assert.equal(editorThemeKind(1), 'light');
     assert.equal(editorThemeKind(2), 'dark');
     assert.equal(editorThemeKind(3), 'dark');
     assert.equal(editorThemeKind(4), 'light');
   });
 
-  it('cycles /theme Auto → Dark → Light → Auto and reads only known values', () => {
-    assert.equal(nextThemeChoice('auto'), 'dark');
-    assert.equal(nextThemeChoice('dark'), 'light');
-    assert.equal(nextThemeChoice('light'), 'auto');
-    assert.equal(parseThemeChoice('light'), 'light');
-    assert.equal(parseThemeChoice('Light'), undefined);
-    assert.equal(parseThemeChoice(3), undefined);
+  it('reads only known color depths', () => {
     assert.equal(parseColorDepth('256'), '256');
     assert.equal(parseColorDepth('16'), '16');
     assert.equal(parseColorDepth(undefined), 'truecolor');
-    assert.equal(themeLabel('auto', 'light'), 'Auto (Easy SSH Light, follows VS Code)');
-    assert.equal(themeLabel('dark', 'light'), 'Easy SSH Dark');
   });
 
   it('keeps the brand hues of the icon and leaves the background to VS Code', () => {
@@ -76,8 +49,6 @@ describe('Easy SSH palettes', () => {
     assert.deepEqual(DARK.badgeTo, hex('#EC4899'));
     assert.deepEqual(DARK.fg.accent, hex('#B39DFA'));
     assert.deepEqual(LIGHT.fg.accent, hex('#6D28D9'));
-    assert.equal(DARK.panel, undefined, 'no painted panel');
-    assert.equal(LIGHT.panel, undefined, 'no painted panel');
     assert.deepEqual(DARK.canvas, hex('#1F1F1F'));
     assert.deepEqual(LIGHT.canvas, hex('#FFFFFF'));
   });
@@ -115,13 +86,13 @@ describe('Easy SSH palettes', () => {
 });
 
 describe('session colors', () => {
-  it('recolors only the cursor and the ANSI colors of one terminal, and resets with 104, 110, 111, 112', () => {
+  it('recolors only the cursor and the ANSI colors of one terminal, and resets with 104 and 112', () => {
     const dark = sessionColorSequence(sessionColorsFor('dark'));
     assert.doesNotMatch(dark, /\x1b\]1[01];/, "the terminal's own background and text stay");
     assert.match(dark, /\x1b\]12;#f59ac8\x07/);
     assert.equal(dark.match(/\x1b\]4;\d+;#[0-9a-f]{6}\x07/g)?.length, 16);
     assert.match(sessionColorSequence(sessionColorsFor('light')), /\x1b\]12;#be185d\x07/);
-    assert.equal(SESSION_COLOR_RESET, '\x1b]104\x07\x1b]110\x07\x1b]111\x07\x1b]112\x07');
+    assert.equal(SESSION_COLOR_RESET, '\x1b]104\x07\x1b]112\x07');
   });
 
   for (const kind of ['dark', 'light'] as const) {

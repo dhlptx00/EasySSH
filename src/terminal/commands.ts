@@ -5,7 +5,6 @@ export type ConnectionAction =
   | { type: 'delete' }
   | { type: 'import' }
   | { type: 'folder' }
-  | { type: 'theme' }
   | { type: 'quit' }
   | { type: 'help' }
   | { type: 'unknown'; text: string };
@@ -32,7 +31,6 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'delete', aliases: ['del', 'rm', 'remove'], description: 'Choose a connection to delete', group: 'command' },
   { name: 'import', aliases: [], description: 'Import hosts from ~/.ssh/config', group: 'command' },
   { name: 'folder', aliases: ['download'], description: 'Choose the download folder', group: 'command' },
-  { name: 'theme', aliases: ['colors'], description: 'Switch colors: Auto, Easy SSH Dark, Easy SSH Light', group: 'command' },
   { name: 'quit', aliases: ['exit', 'q'], description: 'Close the terminal', group: 'command' },
 ];
 
@@ -134,9 +132,6 @@ export function parseConnectionCommand(input: string): ConnectionAction {
     case 'folder':
     case 'download':
       return { type: 'folder' };
-    case 'theme':
-    case 'colors':
-      return { type: 'theme' };
     case 'quit':
     case 'exit':
     case 'q':

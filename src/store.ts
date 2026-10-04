@@ -14,7 +14,6 @@ export interface SecretStore {
 const CONNECTIONS = 'easySsh.connections';
 const HOST_KEYS = 'easySsh.knownHosts';
 const LAST_USED = 'easySsh.lastUsed';
-const THEME = 'easySsh.theme';
 
 function secretKey(id: string): string {
   return `easySsh.secret.${id}`;
@@ -96,16 +95,6 @@ export class ConnectionStore {
 
   async markUsed(id: string, when = Date.now()): Promise<void> {
     await this.state.update(LAST_USED, { ...this.lastUsed(), [id]: when });
-  }
-
-  /** The stored /theme choice: auto, dark or light. */
-  theme(): string | undefined {
-    const value = this.state.get<unknown>(THEME);
-    return typeof value === 'string' ? value : undefined;
-  }
-
-  async setTheme(choice: string): Promise<void> {
-    await this.state.update(THEME, choice);
   }
 
   async secret(id: string): Promise<SecretPayload> {

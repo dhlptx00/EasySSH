@@ -54,7 +54,7 @@ describe('terminal screen', () => {
     assert.match(row.plain, /dev@staging-db\.example\.com:22\s+agent via bastion\s+1 d ago\s+\/staging-db/);
     const never = frame.lines.find((line) => line.plain.includes('dev-box') && line.plain.includes('password'));
     assert.match(never?.plain ?? '', /—/);
-    assert.match(shown, /\/new New · \/edit Edit · \/delete Delete · \/import Import · \/theme Theme · ↑↓ Select · Enter Connect · \/quit\s+│/);
+    assert.match(shown, /\/new New · \/edit Edit · \/delete Delete · \/import Import · ↑↓ Select · Enter Connect · \/quit\s+│/);
     assert.doesNotMatch(shown, /Commands/);
     assert.doesNotMatch(shown, /download →/);
     assert.ok(frame.cursor);
@@ -102,7 +102,7 @@ describe('terminal screen', () => {
     assert.doesNotMatch(shown, /\/staging-db\s*│/);
     assert.match(shown, /NAME\s+HOST/);
     assert.match(shown, /Last: prod-web · 2 h ago/);
-    const hintRows = narrow.lines.filter((line) => /\/new New|\/quit|\/theme Theme/.test(line.plain));
+    const hintRows = narrow.lines.filter((line) => /\/new New|\/quit|↑↓ Select/.test(line.plain));
     assert.ok(hintRows.length >= 2, 'hints wrap onto more lines');
     const small = text(render(home(1), { ...view, cols: 34, rows: 24 }));
     assert.match(small, /dev@bastion…/);
@@ -133,7 +133,8 @@ describe('terminal screen', () => {
     const shown = text(open);
     assert.match(shown, /Connections/);
     assert.match(shown, /Commands/);
-    assert.match(shown, /\/theme/);
+    assert.match(shown, /\/folder/);
+    assert.doesNotMatch(shown, /\/theme/);
     assert.match(shown, /Close the terminal/);
     const filtered = text(render(home(2, '/ed'), view));
     assert.match(filtered, /› \/edit/);
@@ -335,7 +336,7 @@ describe('terminal screen', () => {
     });
 
     it('drops the details box first on a shorter terminal, then the details', () => {
-      const medium = text(render(screen, { ...view, cols: 110, rows: 24 }));
+      const medium = text(render(screen, { ...view, cols: 110, rows: 23 }));
       assert.doesNotMatch(medium, /─ prod-web ─/);
       assert.match(medium, /Sign-in/);
       const short = render(screen, { ...view, cols: 110, rows: 16 });
@@ -345,7 +346,7 @@ describe('terminal screen', () => {
     });
 
     it('keeps only list rows when the slash menu leaves a tiny card', () => {
-      const frame = render({ ...screen, command: '/' }, { ...view, cols: 110, rows: 26 });
+      const frame = render({ ...screen, command: '/' }, { ...view, cols: 110, rows: 25 });
       const top = frame.lines.findIndex((line) => line.plain.includes('╭'));
       const bottom = frame.lines.findIndex((line, index) => index > top && line.plain.includes('╰'));
       const card = frame.lines.slice(top + 1, bottom).map((line) => line.plain).join('\n');

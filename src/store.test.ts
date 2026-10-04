@@ -74,7 +74,7 @@ describe('connection store', () => {
     assert.equal('askPassword' in (list.find((item) => item.id === '4') ?? {}), false);
   });
 
-  it('keeps last-used times and the theme in globalState, and forgets a deleted connection', async () => {
+  it('keeps last-used times in globalState, and forgets a deleted connection', async () => {
     const backing = memory();
     const store = new ConnectionStore(backing.state, backing.secrets);
     assert.deepEqual(store.lastUsed(), {});
@@ -86,8 +86,5 @@ describe('connection store', () => {
     assert.deepEqual(store.lastUsed(), { b: 2000 });
     await backing.state.update('easySsh.lastUsed', { c: 'x', d: -1, e: 5 });
     assert.deepEqual(store.lastUsed(), { e: 5 });
-    assert.equal(store.theme(), undefined);
-    await store.setTheme('light');
-    assert.equal(store.theme(), 'light');
   });
 });

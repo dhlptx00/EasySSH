@@ -9,7 +9,7 @@ An SSH client in a VS Code or Cursor terminal tab. Save your hosts, hop through 
 
 Easy SSH talks SSH directly from your editor. **Nothing is installed on the server**, and no remote editor server is downloaded, so it works on old, small, and locked-down machines where Remote-SSH can't run.
 
-![Easy SSH overview: saved connections, sign-in options, jump hosts, a real login shell, a Ctrl+click or Cmd+click menu to download, open, rename or delete a file or folder, editing a remote file in a VS Code tab, and drop to upload](media/readme/infographic-0.3.0.png)
+![Easy SSH overview: a home screen with your recent connection, a guided /new setup with Test connection, colors that follow your VS Code theme, sign-in options, jump hosts, a real login shell, a Ctrl+click or Cmd+click menu to download, open, rename or delete a file or folder, editing a remote file in a VS Code tab, and drop to upload](media/readme/infographic-0.4.0.png)
 
 ![Demo: pick a connection, open the remote shell, Ctrl+click a folder and download it with progress, then Ctrl+click config.yaml, open it in an editor tab, change a value and save it back to the server](media/readme/connect-menu-open.gif)
 
@@ -23,7 +23,8 @@ Easy SSH talks SSH directly from your editor. **Nothing is installed on the serv
 
 ## What you can do
 
-- Save, edit, and delete SSH connections
+- Pick a connection from a **home screen** that shows your most recent connection, a table with sign-in method and last use, and the details of the selected host
+- Add connections with a **guided `/new` setup**: one field per step with checks, the matching `ssh` command, and **Test connection** before you save. `/edit` changes one field at a time, `/delete` asks first
 - Sign in with a password (saved, or asked every time), a private key, an SSH agent or Pageant. Two-factor prompts are shown in the terminal
 - Hop through one or more jump hosts
 - Import hosts from `~/.ssh/config`, including `Host *` defaults and `ProxyJump` chains
@@ -36,6 +37,7 @@ Easy SSH talks SSH directly from your editor. **Nothing is installed on the serv
 - Follow big transfers in a progress notification with **Cancel**
 - Reconnect after a dropped connection, back into the same folder
 - Open several sessions, each in its own terminal tab named after the server
+- Colors that **follow your VS Code theme**: Easy SSH Dark on dark themes, Easy SSH Light on light ones, switching as soon as you change the theme
 
 ## Requirements and limitations
 
@@ -55,7 +57,7 @@ Click the **Easy SSH** icon in the activity bar, or run **Easy SSH: New Terminal
 
 *The connection list. Up and Down select a connection, Enter connects.*
 
-The list shows each connection's user@host:port, sign-in method (key, password, agent, and the jump host it goes through) and when you last used it. The **Last:** line under the Easy SSH mark names the connection you used most recently; the list starts on it, so Enter reconnects. The bottom line lists the main keys, and the prompt shows a different tip each time.
+The list shows each connection's user@host:port, sign-in method (key, password, agent, and the jump host it goes through) and when you last used it. The **Last:** line under the Easy SSH mark names the connection you used most recently; the list starts on it, so Enter reconnects. When there is room, the selected connection's details (host, port, sign-in, jump host, last used, start folder) show under the list. The key hints sit at the bottom, and the prompt shows a different tip each time. With no connections yet, a **Getting started** box points to `/new` and `/import`.
 
 ## Commands
 
@@ -69,7 +71,6 @@ On the connection panel, type `/` to open the command list. Connections and syst
 | /delete | Choose a connection, then delete it |
 | /import | Import `~/.ssh/config` |
 | /folder | Choose the local download folder |
-| /theme | Switch colors: Auto, Easy SSH Dark, Easy SSH Light |
 | /quit | Close the terminal |
 | Enter | Connect to the selected connection |
 
@@ -81,10 +82,14 @@ On the connection panel, type `/` to open the command list. Connections and syst
 
 | `/new` | `/edit` | `/delete` |
 | --- | --- | --- |
-| ![New connection form](media/readme/03-new-connection-form.png) | ![Editing a connection and choosing a jump host](media/readme/04-edit-connection-jump-host.png) | ![Delete confirmation for a saved connection](media/readme/05-delete-connection-confirm.png) |
-| Fill in the fields for a new connection | Change a connection, here adding a jump host | Confirm before a connection is removed |
+| ![The /new wizard on the sign-in step: Password, Private key or SSH agent](media/readme/03-new-connection-form.png) | ![Editing a connection: pick the field to change](media/readme/04-edit-connection-jump-host.png) | ![Delete confirmation for a saved connection](media/readme/05-delete-connection-confirm.png) |
+| One field per step, with help and checks | Pick a field, change it, save | Confirm before a connection is removed |
 
 `/new` asks one field per step (Step 2 of 6, …), with a short help line under each field and a red message when a value can't work: an empty host, a port that isn't a number from 1 to 65535, a key file that doesn't exist. Esc goes back one step. The last page shows every value and the matching `ssh` command; from there, **Test connection** connects and signs in without saving, **Save** adds the connection, and **Back** returns to the last step. Enter on a value changes just that field.
+
+![The /new summary: every value, the matching ssh command, and a successful Test connection](media/readme/20-new-connection-test.png)
+
+*The last page of `/new`: the values, the matching `ssh` command, and Test connection.*
 
 `/edit` opens the same page for a saved connection: pick the field to change, then Save. `/delete` asks in red, with the connection's name and host, before anything is removed.
 
@@ -94,7 +99,13 @@ For password sign-in you choose whether Easy SSH saves the password or asks for 
 
 ### Themes
 
-The Easy SSH screens come in two palettes based on the Easy SSH icon, **Easy SSH Dark** and **Easy SSH Light**. Both sit on VS Code's own terminal background and use the icon's purple and pink only for the brand mark, accents and a soft tint on the selected row. `/theme` cycles Auto, Dark and Light; Auto follows VS Code's theme (light and high-contrast light themes get Easy SSH Light). The choice is saved in the `easySsh.theme` setting. Connected shells get the palette's cursor and ANSI colors too, in Easy SSH terminals only; turn that off with `easySsh.themeSession`. `easySsh.colorDepth` switches to 256 or 16 colors if colors look wrong.
+The Easy SSH screens follow your VS Code theme: **Easy SSH Dark** with a dark theme, **Easy SSH Light** with a light one (high-contrast themes get the palette of their brightness). Change the VS Code theme and open Easy SSH terminals switch at once; there is nothing to set. Both palettes sit on VS Code's own terminal background and use the icon's purple and pink only for the brand mark, accents and a soft tint on the selected row.
+
+![Easy SSH Light on a light VS Code theme](media/readme/21-theme-light.png)
+
+*Easy SSH Light, with VS Code's Light Modern theme.*
+
+Connected shells get the palette's cursor and ANSI colors too, in Easy SSH terminals only, and the terminal's own colors come back when the session ends; turn that off with `easySsh.themeSession`. `easySsh.colorDepth` switches to 256 or 16 colors if colors look wrong.
 
 ## Remote shell
 
@@ -261,7 +272,6 @@ With SSH agent sign-in, Easy SSH tries the agent first, then `~/.ssh/id_ed25519`
 | `easySsh.terminalLocation` | `panel` | Open Easy SSH in the panel or as an editor tab |
 | `easySsh.windowsAgent` | `auto` | Windows agent: `auto`, `openssh` or `pageant` |
 | `easySsh.readyTimeout` | `20000` | Handshake timeout in ms; time spent on prompts doesn't count |
-| `easySsh.theme` | `auto` | Easy SSH colors: `auto` (follow VS Code), `dark` or `light`; `/theme` changes it |
 | `easySsh.colorDepth` | `truecolor` | Colors the Easy SSH screens use: `truecolor`, `256` or `16` |
 | `easySsh.themeSession` | `true` | Also give connected shells in Easy SSH terminals the Easy SSH cursor and ANSI colors |
 

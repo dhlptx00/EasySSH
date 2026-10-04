@@ -4,7 +4,7 @@ All notable changes to Easy SSH. Dates are in UTC+8.
 
 If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh&ssr=false#review-details) or [Open VSX](https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews) helps others find it.
 
-## [Unreleased]
+## [0.4.0] - 2026-10-05
 
 ### Changed
 
@@ -16,8 +16,13 @@ If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace
 
 ### Added
 
-- `/theme` and the `easySsh.theme` setting: Auto (follows VS Code), Easy SSH Dark, Easy SSH Light. The screens sit on VS Code's own terminal background; the icon's purple and pink mark the brand, accents and a soft tint on the selected row. Every highlight (prompt, selection, slash menu, hints, tips, wizard focus, text cursor) uses the active palette. Picking Light on a dark VS Code theme (or Dark on a light one) gives the boxes their own background so text stays readable. Connected shells get the palette's cursor and ANSI colors, in Easy SSH terminals only, and get their own colors back when the session ends (`easySsh.themeSession`). `easySsh.colorDepth` falls back to 256 or 16 colors.
+- Easy SSH Dark and Easy SSH Light palettes that follow your VS Code theme: Dark with a dark theme, Light with a light one (high-contrast themes get the palette of their brightness). Changing the VS Code theme recolors open Easy SSH terminals at once; there is nothing to set. The screens sit on VS Code's own terminal background; the icon's purple and pink mark the brand, accents and a soft tint on the selected row. Every highlight (prompt, selection, slash menu, hints, tips, wizard focus, text cursor) uses the palette. Connected shells get the palette's cursor and ANSI colors, in Easy SSH terminals only, and get their own colors back when the session ends (`easySsh.themeSession`). `easySsh.colorDepth` falls back to 256 or 16 colors.
 - Test connection on the `/new` and `/edit` summary: connects and signs in without saving.
+
+### Other
+
+- README: new screenshots, infographic and demo GIF for the redesigned screens and themes.
+- Smaller extension: dead code removed, and `package.json` is no longer bundled into the extension.
 
 ## [0.3.0] - 2026-10-04
 
@@ -145,7 +150,7 @@ If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace
 - Open a remote directory, click a file to download it, and drop local files to upload them.
 - Connect with a password, a private key, or an SSH agent, including one or more jump hosts.
 
-[Unreleased]: https://github.com/dhlptx00/EasySSH/compare/v0.3.0...HEAD
+[0.4.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.0
 [0.3.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.3.0
 [0.2.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.2.0
 [0.1.4]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.1.4

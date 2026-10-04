@@ -20,7 +20,7 @@ import { EASYSSH_SCHEME } from './remoteFsProvider';
 import type { UploadQuestion } from './terminal/cwdTracking';
 import { expandHome, formatFingerprint } from './text';
 import type { ConflictChoice, ConnectionRecord, SecretPayload, SecretUpdate } from './types';
-import { editorThemeKind, parseColorDepth, parseThemeChoice, type ThemeChoice } from './terminal/theme';
+import { editorThemeKind, parseColorDepth } from './terminal/theme';
 import type { ConnectUi } from './ssh/session';
 
 class PathLink extends vscode.TerminalLink {
@@ -654,35 +654,7 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
     return { password: update.password, passphrase: update.passphrase };
   }
 
-  /**
-   * The Easy SSH theme. The easySsh.theme setting wins when it is set; otherwise
-   * the last /theme choice kept in globalState (e.g. with Settings Sync off).
-   */
-  themeChoice(): ThemeChoice {
-    const config = settings();
-    const inspected = typeof config.inspect === 'function' ? config.inspect<string>('theme') : undefined;
-    const explicit = inspected && (inspected.globalValue !== undefined || inspected.workspaceValue !== undefined || inspected.workspaceFolderValue !== undefined);
-    if (explicit) return parseThemeChoice(config.get<string>('theme')) ?? 'auto';
-    return parseThemeChoice(this.store.theme()) ?? 'auto';
-  }
-
-  /** /theme: store the choice in globalState and the setting, then redraw every Easy SSH terminal. */
-  async setTheme(choice: ThemeChoice): Promise<void> {
-    await this.store.setTheme(choice);
-    const config = settings();
-    const inspected = typeof config.inspect === 'function' ? config.inspect<string>('theme') : undefined;
-    const target = inspected?.workspaceValue !== undefined ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
-    await config.update('theme', choice, target);
-    this.refreshThemes();
-  }
-
-  /** The setting or VS Code's theme changed: keep globalState in step and redraw. */
-  onThemeSettingChanged(): void {
-    const choice = this.themeChoice();
-    if (this.store.theme() !== choice) void this.store.setTheme(choice);
-    this.refreshThemes();
-  }
-
+  /** VS Code's theme, the color depth or easySsh.themeSession changed: redraw every Easy SSH terminal. */
   refreshThemes(): void {
     for (const live of this.lives) live.app.refreshTheme();
   }
@@ -715,13 +687,11 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
       lastUsed: () => this.store.lastUsed(),
       markUsed: (id) => this.store.markUsed(id),
       theme: () => ({
-        choice: this.themeChoice(),
         // activeColorTheme is missing in old hosts and test stubs: count those as dark.
         editorKind: editorThemeKind((vscode.window.activeColorTheme as vscode.ColorTheme | undefined)?.kind ?? 2),
         depth: parseColorDepth(settings().get<string>('colorDepth')),
         session: settings().get<boolean>('themeSession') !== false,
       }),
-      setTheme: (choice) => this.setTheme(choice),
       downloadFolder: () => this.downloadFolder(),
       downloadLabel: () => downloadFolderLabel(this.downloadFolder(), this.folders.desktop, os.homedir()),
       plainClick: () => this.plainClick(),

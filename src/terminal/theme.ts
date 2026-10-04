@@ -5,9 +5,7 @@
  * background; only the brand mark, accents and selection carry the colors.
  */
 
-/** What the user picked: follow VS Code, or a fixed palette. */
-export type ThemeChoice = 'auto' | 'dark' | 'light';
-/** The palette actually drawn. */
+/** The palette drawn: always the kind of VS Code's color theme. */
 export type ThemeKind = 'dark' | 'light';
 /** How many colors the terminal shows. VS Code's terminal has truecolor. */
 export type ColorDepth = 'truecolor' | '256' | '16';
@@ -38,9 +36,7 @@ export interface Palette {
   /** Display name, e.g. "Easy SSH Dark". */
   name: string;
   fg: Record<Role, Rgb>;
-  /** Background inside the Easy SSH boxes. Unset: the terminal's own background. */
-  panel?: Rgb;
-  /** The background the colors were picked for when there is no panel (VS Code's default). */
+  /** The terminal background the colors were picked for (VS Code's default). The screens never paint it. */
   canvas: Rgb;
   /** The selected row's full-width tint. Rows keep their colors on it. */
   selection: Rgb;
@@ -107,24 +103,8 @@ export const LIGHT: Palette = {
   badgeTo: hex('#DB2777'),
 };
 
-export function parseThemeChoice(value: unknown): ThemeChoice | undefined {
-  return value === 'auto' || value === 'dark' || value === 'light' ? value : undefined;
-}
-
 export function parseColorDepth(value: unknown): ColorDepth {
   return value === '256' || value === '16' ? value : 'truecolor';
-}
-
-/** /theme cycles Auto → Dark → Light → Auto. */
-export function nextThemeChoice(choice: ThemeChoice): ThemeChoice {
-  if (choice === 'auto') return 'dark';
-  if (choice === 'dark') return 'light';
-  return 'auto';
-}
-
-/** The palette kind for a choice. Auto follows VS Code: light and high-contrast light themes get Light. */
-export function resolveThemeKind(choice: ThemeChoice, editorKind: ThemeKind): ThemeKind {
-  return choice === 'auto' ? editorKind : choice;
 }
 
 export function paletteFor(kind: ThemeKind): Palette {
@@ -132,23 +112,9 @@ export function paletteFor(kind: ThemeKind): Palette {
 }
 
 /**
- * The palette to draw for a kind on VS Code's current theme. The palettes use
- * the terminal's own background; when /theme picks the other kind (Light on a
- * dark VS Code theme), the boxes and the session get that palette's background
- * so the text stays readable.
+ * The palette kind for VS Code's ColorThemeKind: 1 Light, 2 Dark, 3 HighContrast,
+ * 4 HighContrastLight. High contrast themes get the palette of their brightness.
  */
-export function paletteOn(kind: ThemeKind, editorKind: ThemeKind): Palette {
-  const palette = paletteFor(kind);
-  return kind === editorKind ? palette : { ...palette, panel: palette.canvas };
-}
-
-/** "Auto (Easy SSH Light)", "Easy SSH Dark". */
-export function themeLabel(choice: ThemeChoice, editorKind: ThemeKind): string {
-  const palette = paletteFor(resolveThemeKind(choice, editorKind));
-  return choice === 'auto' ? `Auto (${palette.name}, follows VS Code)` : palette.name;
-}
-
-/** VS Code ColorThemeKind: 1 Light, 2 Dark, 3 HighContrast, 4 HighContrastLight. */
 export function editorThemeKind(colorThemeKind: number): ThemeKind {
   return colorThemeKind === 1 || colorThemeKind === 4 ? 'light' : 'dark';
 }
@@ -227,10 +193,8 @@ export const DEFAULT_THEME: PaintTheme = { palette: DARK, depth: 'truecolor' };
 
 // ---- connected shell sessions ----
 
+/** The background and text color always stay the terminal's own. */
 export interface SessionColors {
-  /** Unset: keep the terminal's own background and text color. */
-  background?: Rgb;
-  foreground?: Rgb;
   cursor: Rgb;
   /** ANSI 0-15: black, red, green, yellow, blue, magenta, cyan, white, then the bright ones. */
   ansi: Rgb[];
@@ -251,11 +215,9 @@ const LIGHT_ANSI: Rgb[] = [
 ].map(hex);
 
 /** Colors for a connected shell: the palette's pink cursor and its ANSI colors. */
-export function sessionColorsFor(kind: ThemeKind, palette: Palette = paletteFor(kind)): SessionColors {
+export function sessionColorsFor(kind: ThemeKind): SessionColors {
   return {
-    background: palette.panel,
-    foreground: palette.panel ? palette.fg.text : undefined,
-    cursor: palette.fg.accent2,
+    cursor: paletteFor(kind).fg.accent2,
     ansi: kind === 'light' ? LIGHT_ANSI : DARK_ANSI,
   };
 }
@@ -265,20 +227,17 @@ export function oscColor(rgb: Rgb): string {
 }
 
 /**
- * xterm control sequences that recolor one terminal: OSC 10 (text), 11
- * (background), 12 (cursor) and 4 (the ANSI palette). VS Code's terminal applies
- * them to that terminal only; other terminals and the settings do not change.
+ * xterm control sequences that recolor one terminal: OSC 12 (cursor) and 4
+ * (the ANSI palette). VS Code's terminal applies them to that terminal only;
+ * other terminals and the settings do not change.
  */
 export function sessionColorSequence(colors: SessionColors): string {
-  let out = '';
-  if (colors.foreground) out += `\x1b]10;${oscColor(colors.foreground)}\x07`;
-  if (colors.background) out += `\x1b]11;${oscColor(colors.background)}\x07`;
-  out += `\x1b]12;${oscColor(colors.cursor)}\x07`;
+  let out = `\x1b]12;${oscColor(colors.cursor)}\x07`;
   colors.ansi.forEach((rgb, index) => {
     out += `\x1b]4;${index};${oscColor(rgb)}\x07`;
   });
   return out;
 }
 
-/** OSC 104, 110, 111, 112: back to the terminal theme's palette, text, background and cursor. */
-export const SESSION_COLOR_RESET = '\x1b]104\x07\x1b]110\x07\x1b]111\x07\x1b]112\x07';
+/** OSC 104 and 112: back to the terminal theme's ANSI palette and cursor color. */
+export const SESSION_COLOR_RESET = '\x1b]104\x07\x1b]112\x07';

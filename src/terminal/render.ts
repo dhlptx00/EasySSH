@@ -59,8 +59,8 @@ export interface RenderView {
 }
 
 type Tone = Role;
-/** The background of a row or a piece: the Easy SSH panel, the selection bar, or the terminal's own. */
-type Fill = 'panel' | 'none' | 'select' | 'danger';
+/** The background of a row or a piece: the terminal's own, the selection tint, or the delete tint. */
+type Fill = 'none' | 'select' | 'danger';
 
 interface Piece {
   text: string;
@@ -105,7 +105,6 @@ function pageColumn(cols: number): { left: number; width: number } {
 
 function fillColor(fill: Fill): Rgb | undefined {
   const palette = current.palette;
-  if (fill === 'panel') return palette.panel;
   if (fill === 'select') return palette.selection;
   if (fill === 'danger') return palette.danger;
   return undefined;
@@ -127,7 +126,7 @@ function sgr(fg: Rgb, bg: Rgb | undefined, bold: boolean, underline: boolean): s
   return `\x1b[${parts.join(';')}m`;
 }
 
-function paintPieces(pieces: Piece[], width: number, fill: Fill = 'panel'): PaintedLine {
+function paintPieces(pieces: Piece[], width: number, fill: Fill = 'none'): PaintedLine {
   let plain = '';
   let styled = '';
   let used = 0;
@@ -383,7 +382,7 @@ function optionRow(label: string, hint: string, selected: boolean, nameWidth: nu
     { text: padded, tone: bar === 'danger' && !selected ? 'error' : 'text', bold: selected },
   ];
   if (hint) pieces.push({ text: '  ' }, { text: hint, tone: 'muted' });
-  return { pieces, fill: selected ? bar : 'panel' };
+  return { pieces, fill: selected ? bar : 'none' };
 }
 
 /** A box drawn inside a card: a titled border, its rows, and the bottom border. */
@@ -400,7 +399,7 @@ function innerBox(title: string, body: Row[], width: number, tone: Tone): Row[] 
   };
   const rows: Row[] = [top];
   for (const row of body) {
-    const fill = row.fill ?? 'panel';
+    const fill = row.fill ?? 'none';
     const content: Piece[] = [{ text: ' ', fill }, ...row.pieces.map((piece) => ({ ...piece, fill: piece.fill ?? fill }))];
     const used = content.reduce((sum, piece) => sum + displayWidth(piece.text), 0);
     const fitted = used > inner ? clipPieces(content, inner) : [...content, { text: ' '.repeat(inner - used), fill }];
@@ -491,7 +490,7 @@ function wizardCard(screen: Extract<Screen, { kind: 'wizard' }>, width: number, 
           { text: '  ' },
           { text: option.hint, tone: 'muted' },
         ],
-        fill: selected ? 'select' : 'panel',
+        fill: selected ? 'select' : 'none',
       };
     });
     rows.push(...innerBox(stepTitle(screen.step), body, width, boxTone));
@@ -575,7 +574,7 @@ function summaryCard(screen: Extract<Screen, { kind: 'summary' }>, width: number
         { text: ' '.repeat(gap) },
         { text: hint, tone: 'muted' },
       ],
-      fill: selected ? 'select' : 'panel',
+      fill: selected ? 'select' : 'none',
     });
   });
   rows.push(blankRow());
@@ -658,7 +657,7 @@ function frameCard(inner: Row[], left: number, innerWidth: number, cols: number,
   const lines = [rule(left, innerWidth + 2, cols, true, border)];
   let cursor: { row: number; col: number } | undefined;
   inner.forEach((row, index) => {
-    const fill = row.fill ?? 'panel';
+    const fill = row.fill ?? 'none';
     const content = paintPieces(row.pieces, contentWidth, fill);
     const padded = joinPainted([paintPieces([{ text: '  ' }], 2, fill), content, paintPieces([{ text: '  ' }], 2, fill)], innerWidth);
     lines.push(boxSides(left, padded, cols, border));
@@ -937,7 +936,7 @@ function connectionTable(
       } else if (column.key === 'last') pieces.push({ text: cell(lastText(item), column), tone: 'muted' });
       else pieces.push({ text: cell(tokenText(item), column), tone: 'muted' });
     });
-    rows.push({ pieces, fill: isSelected ? 'select' : 'panel' });
+    rows.push({ pieces, fill: isSelected ? 'select' : 'none' });
   });
   return rows;
 }
@@ -947,7 +946,6 @@ const FOOTER_HINTS: [string, string][] = [
   ['/edit', 'Edit'],
   ['/delete', 'Delete'],
   ['/import', 'Import'],
-  ['/theme', 'Theme'],
   ['↑↓', 'Select'],
   ['Enter', 'Connect'],
   ['/quit', ''],
@@ -982,7 +980,7 @@ export function homeTips(click: string, downloads: string): string[] {
     'Drag files onto the terminal to upload them',
     '/import reads hosts from ~/.ssh/config',
     `Downloads go to ${downloads} · /folder changes it`,
-    '/theme switches Auto, Dark and Light colors',
+    'Easy SSH colors follow your VS Code theme',
     'Type / to list every command and connection',
   ];
 }
@@ -1195,7 +1193,7 @@ function gettingStarted(width: number): Row[] {
   const steps: [string, string][] = [
     ['/new', 'Add a connection step by step, then test it before saving'],
     ['/import', 'Bring in the hosts from ~/.ssh/config'],
-    ['/theme', 'Switch between Auto, Dark and Light colors'],
+    ['/folder', 'Choose where downloads go'],
   ];
   const body: Row[] = steps.map(([command, text]) => ({
     pieces: [{ text: command.padEnd(10), tone: 'accent', bold: true }, { text, tone: 'muted' }],
@@ -1265,7 +1263,7 @@ function frameMenu(
   const lines = [rule(left, innerWidth + 2, cols, true, 'accent')];
   for (const row of visible) {
     const active = row.commandIndex === selected;
-    const fill: Fill = active ? 'select' : 'panel';
+    const fill: Fill = active ? 'select' : 'none';
     const content = row.header
       ? paintPieces([{ text: row.header, tone: 'muted' }], contentWidth)
       : paintPieces(menuRow(row.command as SlashCommand, active, nameWidth, contentWidth, query), contentWidth, fill);

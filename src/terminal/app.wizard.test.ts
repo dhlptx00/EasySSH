@@ -5,7 +5,7 @@ import { EasySshApp } from './app';
 import type { AppHost } from './host';
 import type { InputEvent } from './input';
 import { fakeRemote, flush } from './testHost';
-import type { ThemeChoice } from './theme';
+import type { ThemeKind } from './theme';
 
 const prod: ConnectionRecord = {
   id: 'p',
@@ -24,7 +24,9 @@ interface Rig {
   saved: { record: ConnectionRecord; secret: SecretUpdate }[];
   deleted: string[];
   tests: { record: ConnectionRecord; secret: SecretUpdate }[];
-  themes: ThemeChoice[];
+  /** Switch VS Code's theme kind, then tell the app like onDidChangeActiveColorTheme does. */
+  setEditorKind(kind: ThemeKind): void;
+  chunks: string[];
   screen(): string;
   send(...events: InputEvent[]): Promise<void>;
   type(text: string): Promise<void>;
@@ -36,8 +38,8 @@ const enter = key('enter');
 async function rig(options: { records?: ConnectionRecord[]; test?: () => Promise<{ detail?: string }>; lastUsed?: Record<string, number> } = {}): Promise<Rig> {
   const records = [...(options.records ?? [bastion, prod])];
   const chunks: string[] = [];
-  let theme: ThemeChoice = 'auto';
-  const out: Omit<Rig, 'app' | 'screen' | 'send' | 'type'> = { saved: [], deleted: [], tests: [], themes: [] };
+  let editorKind: ThemeKind = 'light';
+  const out = { saved: [] as Rig['saved'], deleted: [] as string[], tests: [] as Rig['tests'] };
   const host: AppHost = {
     listConnections: async () => records,
     saveConnection: async (record, secret) => {
@@ -56,11 +58,7 @@ async function rig(options: { records?: ConnectionRecord[]; test?: () => Promise
       return options.test ? options.test() : { detail: 'SFTP works' };
     },
     lastUsed: () => options.lastUsed ?? {},
-    theme: () => ({ choice: theme, editorKind: 'light', depth: 'truecolor' }),
-    setTheme: async (choice) => {
-      theme = choice;
-      out.themes.push(choice);
-    },
+    theme: () => ({ editorKind, depth: 'truecolor' }),
     downloadFolder: () => '/Users/me/Downloads',
     home: () => '/Users/me',
     chooseDownloadFolder: async () => undefined,
@@ -84,6 +82,11 @@ async function rig(options: { records?: ConnectionRecord[]; test?: () => Promise
   return {
     app,
     ...out,
+    chunks,
+    setEditorKind: (kind) => {
+      editorKind = kind;
+      app.refreshTheme();
+    },
     // The last full frame, without escape codes.
     screen: () => {
       const all = chunks.join('');
@@ -249,15 +252,17 @@ describe('home', () => {
     assert.match(screen, /key via bastion/);
   });
 
-  it('/theme cycles Auto, Dark, Light and stores each choice', async () => {
+  it('follows the VS Code theme kind live and has no /theme command', async () => {
     const r = await rig();
-    await r.type('/theme');
-    assert.deepEqual(r.themes, ['dark']);
-    assert.match(r.screen(), /Theme: Easy SSH Dark/);
-    await r.type('/theme');
-    await r.type('/theme');
-    assert.deepEqual(r.themes, ['dark', 'light', 'auto']);
-    assert.match(r.screen(), /Theme: Auto \(Easy SSH Light, follows VS Code\)/);
+    assert.match(r.chunks.join(''), /\x1b\]12;#6d28d9\x07/i, 'Easy SSH Light on a light VS Code theme');
+    assert.match(r.chunks.join(''), /38;2;109;40;217/, 'light accent');
+    r.chunks.length = 0;
+    r.setEditorKind('dark');
+    assert.match(r.chunks.join(''), /\x1b\]12;#b39dfa\x07/i, 'redrawn in Easy SSH Dark at once');
+    assert.match(r.chunks.join(''), /38;2;179;157;250/, 'dark accent');
+    await r.send({ type: 'text', text: '/' });
+    assert.match(r.screen(), /\/import/);
+    assert.doesNotMatch(r.screen(), /\/theme/);
   });
 
   it('remembers a successful connect', async () => {
@@ -308,9 +313,10 @@ describe('session colors', () => {
     const remote = fakeRemote();
     const chunks: string[] = [];
     let session = true;
+    let editorKind: ThemeKind = 'light';
     const app = new EasySshApp({
       ...remote.host,
-      theme: () => ({ choice: 'light', editorKind: 'dark', depth: 'truecolor', session }),
+      theme: () => ({ editorKind, depth: 'truecolor', session }),
     }, (data) => chunks.push(data));
     app.setSize(100, 30);
     app.open();
@@ -322,25 +328,30 @@ describe('session colors', () => {
     await flush();
     const connected = chunks.join('');
     assert.match(connected, /\x1b\]112\x07/, 'the menu cursor color is reset before the shell');
-    assert.match(connected, /\x1b\]11;#ffffff\x07/, 'Easy SSH Light on a dark VS Code theme brings its own background');
+    assert.doesNotMatch(connected, /\x1b\]1[01];/, "the terminal's own background and text stay");
     assert.match(connected, /\x1b\]12;#be185d\x07/, 'the pink cursor');
+    chunks.length = 0;
+    editorKind = 'dark';
+    app.refreshTheme();
+    assert.match(chunks.join(''), /\x1b\]12;#f59ac8\x07/, 'a VS Code theme change recolors the open session');
+    assert.match(chunks.join(''), /\x1b\]4;1;#f87171\x07/);
     chunks.length = 0;
     session = false;
     app.refreshTheme();
-    assert.match(chunks.join(''), /\x1b\]111\x07/, 'turning it off restores the colors at once');
+    assert.match(chunks.join(''), /\x1b\]104\x07\x1b\]112\x07/, 'turning it off restores the colors at once');
     session = true;
     app.refreshTheme();
     chunks.length = 0;
     app.onRemoteClose('gone');
     await flush();
-    assert.match(chunks.join(''), /\x1b\]104\x07\x1b\]110\x07\x1b\]111\x07\x1b\]112\x07/, 'leaving the session restores the colors');
+    assert.match(chunks.join(''), /\x1b\]104\x07\x1b\]112\x07/, 'leaving the session restores the colors');
     app.dispose();
   });
 
-  it('keeps the terminal background in a session when the palette matches VS Code', async () => {
+  it('uses Easy SSH Dark colors in a session on a dark VS Code theme', async () => {
     const remote = fakeRemote();
     const chunks: string[] = [];
-    const app = new EasySshApp({ ...remote.host, theme: () => ({ choice: 'auto', editorKind: 'dark', depth: 'truecolor', session: true }) }, (data) => chunks.push(data));
+    const app = new EasySshApp({ ...remote.host, theme: () => ({ editorKind: 'dark', depth: 'truecolor', session: true }) }, (data) => chunks.push(data));
     app.setSize(100, 30);
     app.open();
     await flush();
