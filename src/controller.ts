@@ -14,19 +14,17 @@ import { EasySshApp } from './terminal/app';
 import { shortRemote, type ActionMenu, type FileAction } from './terminal/actions';
 import type { AppHost, ProgressHandle, RenameRequest } from './terminal/host';
 import { EasySshPty } from './terminal/pty';
+import type { LineLink } from './terminal/render';
 import type { UploadQuestion } from './terminal/cwdTracking';
 import { expandHome, formatFingerprint } from './text';
 import type { ConflictChoice, ConnectionRecord } from './types';
 
 class PathLink extends vscode.TerminalLink {
   constructor(
-    startIndex: number,
-    length: number,
-    readonly remotePath: string,
-    tooltip: string,
+    readonly link: LineLink,
     readonly owner: EasySshApp,
   ) {
-    super(startIndex, length, tooltip);
+    super(link.start, link.length, link.tooltip);
   }
 }
 
@@ -338,11 +336,11 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
     if (!live) return [];
     return live.app.linkFor(context.line)
       .filter((link) => link.length > 0)
-      .map((link) => new PathLink(link.start, link.length, link.remotePath, link.tooltip, live.app));
+      .map((link) => new PathLink(link, live.app));
   }
 
   handleTerminalLink(link: PathLink): void {
-    link.owner.activatePath(link.remotePath);
+    link.owner.activateLink(link.link);
   }
 
   private downloadFolder(): string {

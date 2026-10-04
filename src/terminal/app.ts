@@ -81,6 +81,10 @@ interface TransferJob {
 
 /** A transfer from the action menu shows its notification after this long. */
 const MENU_NOTIFY_MS = 300;
+/** Wait this long after a prompt before listing the folder again. */
+const LISTING_DEBOUNCE_MS = 150;
+/** Folders up to this many names are re-listed after every command; bigger ones when their time changed. */
+const LISTING_ALWAYS_MAX = 2000;
 
 /** Keeps a held answer while a connection waits for the user. */
 interface PendingPrompt {
@@ -136,6 +140,10 @@ export class EasySshApp {
   private hostName = '';
   /** The login shell family, for quoting View and Edit command lines. */
   private shellKind: ShellKind = 'unknown';
+  private listingTimer: ReturnType<typeof setTimeout> | undefined;
+  private listingBusy = false;
+  private listingAgain = false;
+  private listedFolder: { path: string; mtime: number } | undefined;
   /** Folder reports from the prompt hook since this connection opened. */
   private cwdReports = 0;
   /** When a command was submitted that the prompt hook has not answered yet. */
@@ -243,10 +251,44 @@ export class EasySshApp {
     void this.enqueue(() => this.openRemote(remotePath));
   }
 
+  /**
+   * A click on a link VS Code offered. VS Code can keep offering a link for a row
+   * whose text has since changed (the pointer stayed on the row while `clear && ls`
+   * redrew it), so check that the row still shows the text the link was made for.
+   * If it changed, act on the name now under the link, or ask for a fresh click.
+   */
+  activateLink(link: Pick<LineLink, 'remotePath' | 'start' | 'length' | 'anchors'>): void {
+    if (this.raw && this.remoteAlt) return;
+    const checked = this.checkLink(link);
+    if (checked.kind === 'stale') {
+      this.host.log(`Ignored a click on ${link.remotePath}: the terminal row changed after the link was made`);
+      this.host.notify?.('info', 'The terminal text under the pointer changed. Move the pointer off the name, then click it again.');
+      return;
+    }
+    if (checked.remotePath !== link.remotePath) this.host.log(`The terminal row changed under the pointer: using ${checked.remotePath} instead of ${link.remotePath}`);
+    this.activatePath(checked.remotePath);
+  }
+
+  private checkLink(link: Pick<LineLink, 'remotePath' | 'start' | 'length' | 'anchors'>): { kind: 'ok'; remotePath: string } | { kind: 'stale' } {
+    const anchors = link.anchors;
+    // No anchor: a wrapped line, or a row scrolled into view from history. Trust it.
+    if (!this.raw || !anchors || anchors.length === 0) return { kind: 'ok', remotePath: link.remotePath };
+    if (anchors.some((anchor) => this.viewport.unchanged(anchor))) return { kind: 'ok', remotePath: link.remotePath };
+    const remote = this.remote;
+    if (anchors.length !== 1 || !remote || !remote.files) return { kind: 'stale' };
+    const now = nameSpans(this.viewport.text(anchors[0].row), remote.entries, this.downloadLabel(), this.host.showActionMenu !== undefined);
+    const end = link.start + link.length;
+    const under = now.filter((span) => span.start < end && link.start < span.start + span.length);
+    return under.length === 1 ? { kind: 'ok', remotePath: under[0].remotePath } : { kind: 'stale' };
+  }
+
   linkFor(line: string): LineLink[] {
     if (this.raw) {
       if (this.remoteAlt || !this.remote || this.remote.lost || !this.remote.files) return [];
-      return nameSpans(line, this.remote.entries, this.downloadLabel(), this.host.showActionMenu !== undefined);
+      const spans = nameSpans(line, this.remote.entries, this.downloadLabel(), this.host.showActionMenu !== undefined);
+      if (spans.length === 0) return spans;
+      const anchors = this.viewport.anchor(line);
+      return spans.map((span) => ({ ...span, anchors }));
     }
     const found = this.links.get(line) ?? this.links.get(line.trimEnd());
     if (found) return found;
@@ -289,6 +331,8 @@ export class EasySshApp {
     this.clearRawTimer();
     this.clearStatusTimer();
     this.clearReconnect();
+    if (this.listingTimer) clearTimeout(this.listingTimer);
+    this.listingTimer = undefined;
     this.resetFollow();
     this.connectAbort?.abort();
     this.answerPending();
@@ -840,7 +884,13 @@ export class EasySshApp {
     // The shell reports folders already (a reconnect into a shell with the hook, or the
     // user's own prompt): no need to type the setup line.
     if (update.cwd !== undefined && this.hookPhase === 'waiting') this.finishHook();
-    if (!update.cwd || !this.remote || (update.cwd === this.remote.cwd && !this.remote.lost)) return;
+    if (update.cwd && this.remote && update.cwd === this.remote.cwd && !this.remote.lost) {
+      // Back at the prompt in the same folder: a command may have created, renamed
+      // or deleted names here, so list the folder again (debounced).
+      this.scheduleListingRefresh();
+      return;
+    }
+    if (!update.cwd || !this.remote) return;
     this.remote = { ...this.remote, cwd: update.cwd };
     if (!this.remote.files) return;
     if (!this.transferAbort) this.host.setStatus(`${this.remote.title}:${update.cwd}`);
@@ -2001,6 +2051,52 @@ export class EasySshApp {
     this.transferAbort?.abort();
     this.progress?.close();
     this.progress = undefined;
+  }
+
+  /** List the shell's folder again soon; several prompts in a row make one listing. */
+  private scheduleListingRefresh(): void {
+    if (!this.remote || !this.remote.files || this.closed) return;
+    if (this.listingTimer) clearTimeout(this.listingTimer);
+    this.listingTimer = setTimeout(() => {
+      this.listingTimer = undefined;
+      void this.refreshSameFolder();
+    }, LISTING_DEBOUNCE_MS);
+  }
+
+  /**
+   * Re-list the current folder after a command, so names it created become
+   * clickable. A big folder is only re-listed when its modification time changed.
+   */
+  private async refreshSameFolder(): Promise<void> {
+    if (this.listingBusy) {
+      this.listingAgain = true;
+      return;
+    }
+    const session = this.session;
+    const remote = this.remote;
+    if (!session || !remote || !remote.files || remote.lost || this.closed) return;
+    const cwd = remote.cwd;
+    const epoch = this.browseEpoch;
+    this.listingBusy = true;
+    try {
+      let folderTime: number | undefined;
+      if (remote.entries.length > LISTING_ALWAYS_MAX && session.stat) {
+        folderTime = await session.stat(cwd).then((found) => found.mtime).catch(() => undefined);
+        if (folderTime !== undefined && this.listedFolder?.path === cwd && this.listedFolder.mtime === folderTime) return;
+      }
+      const entries = withParent(cwd, await session.list(cwd));
+      if (epoch !== this.browseEpoch || this.session !== session || !this.remote || this.remote.cwd !== cwd) return;
+      this.remote = { ...this.remote, entries };
+      this.listedFolder = folderTime === undefined ? undefined : { path: cwd, mtime: folderTime };
+    } catch {
+      // The folder may have become unreadable. Keep the previous list.
+    } finally {
+      this.listingBusy = false;
+      if (this.listingAgain) {
+        this.listingAgain = false;
+        this.scheduleListingRefresh();
+      }
+    }
   }
 
   private async refreshListing(cwd: string): Promise<void> {

@@ -63,14 +63,14 @@ describe('controller: two Easy SSH terminals', () => {
     lives.forEach((live, index) => {
       const tag = index === 0 ? 'left' : 'right';
       live.app.linkFor = (line: string) => [{ start: 0, length: line.length, remotePath: `/${tag}/${line}`, kind: 'file', tooltip: tag }];
-      live.app.activatePath = (path: string) => opened.push(`${tag}:${path}`);
+      live.app.activateLink = (link: { remotePath: string }) => opened.push(`${tag}:${link.remotePath}`);
     });
 
     // The left pane is focused (the active terminal), the right pane is hovered.
     controller.noteActiveTerminal(created[0] as never);
     const rightLinks = controller.provideTerminalLinks({ line: 'a.txt', terminal: created[1] } as never);
     assert.equal(rightLinks.length, 1);
-    assert.equal(rightLinks[0].remotePath, '/right/a.txt');
+    assert.equal(rightLinks[0].link.remotePath, '/right/a.txt');
     controller.handleTerminalLink(rightLinks[0]);
     const leftLinks = controller.provideTerminalLinks({ line: 'b.txt', terminal: created[0] } as never);
     controller.handleTerminalLink(leftLinks[0]);
@@ -82,7 +82,7 @@ describe('controller: two Easy SSH terminals', () => {
 
     // Closing the left pane keeps the right one working.
     controller.onClosed(created[0] as never);
-    assert.equal(controller.provideTerminalLinks({ line: 'c', terminal: created[1] } as never)[0].remotePath, '/right/c');
+    assert.equal(controller.provideTerminalLinks({ line: 'c', terminal: created[1] } as never)[0].link.remotePath, '/right/c');
   });
 });
 

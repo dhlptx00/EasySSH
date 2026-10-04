@@ -1,4 +1,5 @@
 import { formatFingerprint, shortenPath, truncate, displayWidth } from '../text';
+import type { RowAnchor } from './viewport';
 import type { BrowseEntry, Notice } from '../types';
 import { assignConnectionTokens, matchSlashCommands, type SlashCommand, type SlashTarget } from './commands';
 import type { Screen } from './screen';
@@ -10,6 +11,11 @@ export interface LineLink {
   remotePath: string;
   kind: 'file' | 'dir';
   tooltip: string;
+  /**
+   * The viewport rows that showed this line when the link was offered. A click
+   * checks them, because VS Code can keep a link after the row's text changed.
+   */
+  anchors?: RowAnchor[];
 }
 
 export interface PaintedLine {

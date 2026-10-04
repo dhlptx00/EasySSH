@@ -4,8 +4,26 @@ import { charWidth } from '../text';
  * The visible cells of the live terminal, used to see which file name was clicked.
  * What the terminal shows is still the raw byte stream. This only mirrors it.
  */
+/** A row's identity when a link was offered: which row, and its content stamp then. */
+export interface RowAnchor {
+  /** 1-based viewport row. */
+  row: number;
+  stamp: number;
+}
+
+/** How many stamps of rows that scrolled off the top are remembered. */
+const SCROLLED_OFF_MEMORY = 2000;
+
 export class Viewport {
   private lines: string[][] = [];
+  /**
+   * One stamp per row. A row gets a fresh stamp whenever its content changes, and
+   * keeps it while it scrolls, so a stamp says "this exact row content".
+   */
+  private stamps: number[] = [];
+  private nextStamp = 1;
+  private readonly scrolledOff = new Set<number>();
+  private normalStamps: number[] | undefined;
   private row = 0;
   private col = 0;
   private savedRow = 0;
@@ -29,23 +47,68 @@ export class Viewport {
   resize(cols: number, rows: number): void {
     const nextCols = Math.max(1, cols);
     const nextRows = Math.max(1, rows);
-    this.row = this.refit(this.lines, this.row, nextRows);
-    if (this.normalLines) this.normalRow = this.refit(this.normalLines, this.normalRow, nextRows);
+    this.row = this.refit(this.lines, this.stamps, this.row, nextRows);
+    if (this.normalLines && this.normalStamps) this.normalRow = this.refit(this.normalLines, this.normalStamps, this.normalRow, nextRows);
     this.cols = nextCols;
     this.rows = nextRows;
     this.clamp();
     this.normalCol = Math.max(0, Math.min(this.cols - 1, this.normalCol));
   }
 
-  private refit(lines: string[][], row: number, rows: number): number {
+  private refit(lines: string[][], stamps: number[], row: number, rows: number): number {
     const extra = lines.length - rows;
     let next = row;
     if (extra > 0) {
       lines.splice(0, extra);
+      for (const stamp of stamps.splice(0, extra)) this.forget(stamp);
       next = Math.max(0, next - extra);
     }
-    while (lines.length < rows) lines.push([]);
+    while (lines.length < rows) {
+      lines.push([]);
+      stamps.push(this.nextStamp++);
+    }
     return next;
+  }
+
+  /** The text on a 1-based viewport row, as the terminal shows it. */
+  text(row: number): string {
+    return this.cells(row).join('').trimEnd();
+  }
+
+  /** The rows showing exactly this line of text now. */
+  anchor(line: string): RowAnchor[] {
+    const wanted = line.trimEnd();
+    if (!wanted) return [];
+    const found: RowAnchor[] = [];
+    for (let index = 0; index < this.lines.length; index += 1) {
+      if (this.text(index + 1) === wanted) found.push({ row: index + 1, stamp: this.stamps[index] ?? 0 });
+    }
+    return found;
+  }
+
+  /**
+   * Whether a row still shows what it showed when anchored: it is on screen with
+   * the same stamp (perhaps moved by scrolling), or it scrolled off unchanged.
+   */
+  unchanged(anchor: RowAnchor): boolean {
+    return this.stamps.includes(anchor.stamp) || this.scrolledOff.has(anchor.stamp);
+  }
+
+  private touch(row: number): void {
+    this.stamps[row] = this.nextStamp++;
+  }
+
+  private forget(stamp: number | undefined): void {
+    if (stamp === undefined) return;
+    this.scrolledOff.add(stamp);
+    if (this.scrolledOff.size > SCROLLED_OFF_MEMORY) {
+      const oldest = this.scrolledOff.values().next().value;
+      if (oldest !== undefined) this.scrolledOff.delete(oldest);
+    }
+  }
+
+  private freshStamps(): number[] {
+    return Array.from({ length: this.rows }, () => this.nextStamp++);
   }
 
   /** Cells on a 1-based viewport row. */
@@ -59,6 +122,7 @@ export class Viewport {
 
   private reset(): void {
     this.lines = Array.from({ length: this.rows }, () => []);
+    this.stamps = this.freshStamps();
     this.row = 0;
     this.col = 0;
   }
@@ -136,6 +200,7 @@ export class Viewport {
     }
     const line = this.lines[this.row] ?? [];
     this.lines[this.row] = line;
+    this.touch(this.row);
     while (line.length < this.col) line.push(' ');
     line[this.col] = ch;
     if (width === 2) line[this.col + 1] = '';
@@ -148,7 +213,9 @@ export class Viewport {
       return;
     }
     this.lines.shift();
+    this.forget(this.stamps.shift());
     this.lines.push([]);
+    this.stamps.push(this.nextStamp++);
   }
 
   private reverse(): void {
@@ -157,7 +224,9 @@ export class Viewport {
       return;
     }
     this.lines.pop();
+    this.stamps.pop();
     this.lines.unshift([]);
+    this.stamps.unshift(this.nextStamp++);
   }
 
   private save(): void {
@@ -213,6 +282,7 @@ export class Viewport {
     if (enable) {
       if (!this.alt) {
         this.normalLines = this.lines.map((line) => line.slice());
+        this.normalStamps = this.stamps.slice();
         this.normalRow = this.row;
         this.normalCol = this.col;
         this.alt = true;
@@ -223,6 +293,8 @@ export class Viewport {
     if (!this.alt || !this.normalLines) return;
     this.alt = false;
     this.lines = this.normalLines;
+    this.stamps = this.normalStamps ?? this.freshStamps();
+    this.normalStamps = undefined;
     this.row = this.normalRow;
     this.col = this.normalCol;
     this.normalLines = undefined;
@@ -232,20 +304,28 @@ export class Viewport {
   private eraseDisplay(mode: number): void {
     if (mode === 2 || mode === 3) {
       this.lines = Array.from({ length: this.rows }, () => []);
+      this.stamps = this.freshStamps();
       return;
     }
     if (mode === 1) {
-      for (let row = 0; row < this.row; row += 1) this.lines[row] = [];
+      for (let row = 0; row < this.row; row += 1) {
+        this.lines[row] = [];
+        this.touch(row);
+      }
       this.eraseLine(1);
       return;
     }
     this.eraseLine(0);
-    for (let row = this.row + 1; row < this.rows; row += 1) this.lines[row] = [];
+    for (let row = this.row + 1; row < this.rows; row += 1) {
+      this.lines[row] = [];
+      this.touch(row);
+    }
   }
 
   private eraseLine(mode: number): void {
     const line = this.lines[this.row] ?? [];
     this.lines[this.row] = line;
+    this.touch(this.row);
     if (mode === 2) {
       this.lines[this.row] = [];
       return;
