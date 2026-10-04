@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import type { BrowseEntry } from '../types';
 import { homeTips, nameSpans, render, type Frame } from './render';
 import type { ConnectionItem, Screen } from './screen';
+import { VARIANTS } from './palettes';
 import { DARK, LIGHT, type PaintTheme } from './theme';
 import { emptyDraft } from './wizard';
 
@@ -64,7 +65,7 @@ describe('terminal screen', () => {
 
   it('aligns the columns and paints the selected row as a full-width bar', () => {
     const frame = render(home(2), view);
-    const rows = frame.lines.filter((line) => /bastion\.example|dev-box\.example|prod-web\.example|staging-db\.example/.test(line.plain) && !line.plain.includes('Last:'));
+    const rows = frame.lines.filter((line) => /bastion\.example|dev-box\.example|prod-web\.example|staging-db\.example/.test(line.plain) && !line.plain.includes('Last:') && !/Host {2,}/.test(line.plain));
     assert.equal(rows.length, 4);
     const hostColumn = rows.map((line) => line.plain.indexOf('@') - line.plain.slice(0, line.plain.indexOf('@')).split(' ').pop()!.length);
     assert.equal(new Set(hostColumn).size, 1, 'hosts start in one column');
@@ -302,5 +303,63 @@ describe('terminal screen', () => {
     ];
     assert.deepEqual(nameSpans('root@host:~$ ', entries).map((link) => link.remotePath), []);
     assert.deepEqual(nameSpans('notes@ notes', entries).map((link) => link.remotePath), ['/var/notes', '/var/notes']);
+  });
+
+  describe('vertical layout', () => {
+    const detailed = items.map((item) => ({ ...item, host: item.userHost.split('@')[1].replace(/:22$/, ''), username: item.userHost.split('@')[0], port: 22 }));
+    const screen: Screen = { kind: 'connections', items: detailed, selected: 2, command: '', pick: 0 };
+    const rowOf = (frame: Frame, pattern: RegExp) => frame.lines.findIndex((line) => pattern.test(line.plain));
+
+    it('puts the key hints near the bottom of the card and the details of the selected row in between', () => {
+      const frame = render(screen, { ...view, cols: 110, rows: 40 });
+      const cardBottom = rowOf(frame, /╰─+╯/);
+      const footer = rowOf(frame, /\/new New/);
+      assert.ok(cardBottom - footer <= 3, `hints at ${footer}, card ends at ${cardBottom}`);
+      assert.match(text(frame), /─ prod-web ─/, 'a details box titled with the selected name');
+      assert.match(text(frame), /Sign-in\s+Key/);
+      assert.match(text(frame), /Jump host\s+None, direct connection/);
+      const brand = rowOf(frame, /Easy SSH/);
+      assert.ok(brand > 2, 'the content is centered, not stuck to the top');
+    });
+
+    it('drops the details box first on a shorter terminal, then the details', () => {
+      const medium = text(render(screen, { ...view, cols: 110, rows: 24 }));
+      assert.doesNotMatch(medium, /─ prod-web ─/);
+      assert.match(medium, /Sign-in/);
+      const short = render(screen, { ...view, cols: 110, rows: 16 });
+      assert.doesNotMatch(text(short), /Jump host/);
+      assert.match(text(short), /\/new New/, 'the hints always stay');
+      assert.equal(short.lines.length, 16);
+    });
+
+    it('shows Getting started on an empty list', () => {
+      const shown = text(render({ kind: 'connections', items: [], selected: 0, command: '', pick: 0 }, { ...view, rows: 30 }));
+      assert.match(shown, /Getting started/);
+      assert.match(shown, /\/import\s+Bring in the hosts/);
+    });
+  });
+
+  describe('palette variants', () => {
+    for (const variant of Object.values(VARIANTS)) {
+      for (const palette of [variant.dark, variant.light]) {
+        it(`${variant.id} ${palette.kind} paints the home screen in its own colors`, () => {
+          const frame = render(home(2), { ...view, theme: { palette, depth: 'truecolor' } });
+          const selected = frame.lines.find((line) => line.plain.includes('prod-web.example') && !line.plain.includes('Last:'));
+          assert.ok(selected);
+          if (palette.selectStyle === 'marker') {
+            assert.match(selected.plain, /▌ prod-web/);
+            assert.ok(palette.panel, 'marker palettes paint a panel');
+            // No bar: the row has the panel background like the others.
+            assert.ok(selected.styled.includes(`48;2;${rgb(palette.panel)}`));
+          } else {
+            assert.match(selected.plain, /› prod-web/);
+            assert.ok(selected.styled.includes(`48;2;${rgb(palette.selection)}`));
+          }
+          const styled = frame.lines.map((line) => line.styled).join('');
+          if (palette.panel) assert.ok(styled.includes(`48;2;${rgb(palette.panel)}`));
+          else assert.ok(!styled.includes(`48;2;${rgb(DARK.panel)}`) && !styled.includes(`48;2;${rgb(LIGHT.panel)}`), 'no painted panel');
+        });
+      }
+    }
   });
 });

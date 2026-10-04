@@ -12,6 +12,7 @@ If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace
 - `/new` is a step-by-step wizard: Step X of Y, one boxed field with help per step, inline checks (empty host, port, missing key file), Esc to go back, and a summary with the matching `ssh` command, **Test connection**, **Save** and **Back**.
 - `/edit` opens the summary of the connection: pick a field, change it, save. `/delete` asks in red with the name and host.
 - After a session ends, the list selects the connection you just used.
+- The home screen uses the terminal's height: the key hints sit at the bottom, the parts get more room on tall terminals, and the selected connection's details (host, port, sign-in, jump host, last used, start folder) show under the list when they fit. An empty list shows Getting started.
 
 ### Added
 

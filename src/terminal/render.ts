@@ -4,7 +4,7 @@ import { classifyName } from '../fileTypes';
 import type { BrowseEntry, Notice } from '../types';
 import { assignConnectionTokens, matchSlashCommands, type SlashCommand, type SlashTarget } from './commands';
 import { SUMMARY_ACTIONS, type ConnectionItem, type Screen, type SummaryAction } from './screen';
-import { colorCode, DEFAULT_THEME, mix, type PaintTheme, type Rgb, type Role } from './theme';
+import { colorCode, DEFAULT_THEME, mix, type PaintTheme, type Rgb, type Role, type SelectStyle } from './theme';
 import {
   choiceOptions,
   FIELDS,
@@ -102,20 +102,50 @@ function pageColumn(cols: number): { left: number; width: number } {
   return { left, width: Math.min(width, cols - left) };
 }
 
+function selectStyle(): SelectStyle {
+  return current.palette.selectStyle ?? 'bar';
+}
+
 function fillColor(fill: Fill): Rgb | undefined {
   const palette = current.palette;
+  const marker = selectStyle() === 'marker';
   if (fill === 'panel') return palette.panel;
-  if (fill === 'select') return palette.selection;
-  if (fill === 'danger') return palette.danger;
+  if (fill === 'select') return marker ? palette.panel : palette.selection;
+  if (fill === 'danger') return marker ? palette.panel : palette.danger;
   return undefined;
 }
 
 function toneColor(tone: Tone, fill: Fill): Rgb {
   const palette = current.palette;
   if (fill === 'select' || fill === 'danger') {
-    return tone === 'muted' || tone === 'border' ? palette.fg.selMuted : palette.fg.selText;
+    const style = selectStyle();
+    // A solid bar has its own text colors; a tint or a marker keeps the row's.
+    if (style === 'bar') return tone === 'muted' || tone === 'border' ? palette.fg.selMuted : palette.fg.selText;
+    if (tone === 'text') return fill === 'danger' ? palette.fg.error : palette.fg.selText;
   }
   return palette.fg[tone];
+}
+
+/** The › of a selected row in the palette's marker color; a ▌ when the style has no bar. */
+function markSelection(pieces: Piece[], fill: Fill): Piece[] {
+  const style = selectStyle();
+  if (style === 'bar') return pieces;
+  const selectedFill = (piece: Piece) => {
+    const own = piece.fill ?? fill;
+    return own === 'select' || own === 'danger' ? own : undefined;
+  };
+  if (!pieces.some((piece) => selectedFill(piece))) return pieces;
+  let marked = false;
+  return pieces.map((piece) => {
+    const own = selectedFill(piece);
+    if (!own) return piece;
+    if (!marked && piece.text === '› ') {
+      marked = true;
+      const role: Tone = own === 'danger' ? 'error' : current.palette.marker ?? 'accent';
+      return { ...piece, text: style === 'marker' ? '▌ ' : '› ', fg: current.palette.fg[role], bold: true };
+    }
+    return style === 'marker' ? { ...piece, bold: true } : piece;
+  });
 }
 
 function sgr(fg: Rgb, bg: Rgb | undefined, bold: boolean, underline: boolean): string {
@@ -127,7 +157,8 @@ function sgr(fg: Rgb, bg: Rgb | undefined, bold: boolean, underline: boolean): s
   return `\x1b[${parts.join(';')}m`;
 }
 
-function paintPieces(pieces: Piece[], width: number, fill: Fill = 'panel'): PaintedLine {
+function paintPieces(input: Piece[], width: number, fill: Fill = 'panel'): PaintedLine {
+  const pieces = markSelection(input, fill);
   let plain = '';
   let styled = '';
   let used = 0;
@@ -1008,27 +1039,19 @@ function renderHome(screen: Extract<Screen, { kind: 'connections' }>, view: Rend
   const selectedItem = screen.items[screen.selected];
   const recent = mostRecent(screen.items);
 
-  const build = (listLimit: number): Row[] => {
+  const intro = (): Piece[][] => {
     const beside: Piece[][] = [];
     if (screen.items.length === 0) {
       beside.push([{ text: 'SSH terminal with file transfer and remote editing', tone: 'muted' }]);
       beside.push([{ text: 'Start with ', tone: 'muted' }, { text: '/new', tone: 'accent', bold: true }, { text: ' or ', tone: 'muted' }, { text: '/import', tone: 'accent', bold: true }, { text: ' (reads ~/.ssh/config)', tone: 'muted' }]);
     } else {
       const room = contentWidth >= BADGE_WIDTH + 24 ? contentWidth - BADGE_WIDTH - 2 : contentWidth;
-      const intro = 'Type /name to connect, or pick a row and press Enter';
+      const text = 'Type /name to connect, or pick a row and press Enter';
       const shortIntro = displayWidth('Type /name or press Enter to connect') <= room ? 'Type /name or press Enter to connect' : 'Type /name to connect';
-      beside.push([{ text: displayWidth(intro) <= room ? intro : shortIntro, tone: 'muted' }]);
+      beside.push([{ text: displayWidth(text) <= room ? text : shortIntro, tone: 'muted' }]);
       if (recent) beside.push(recentPieces(recent, selectedItem, tokens.get(recent.id) ?? recent.name, now, room));
     }
-    const out: Row[] = [blankRow(), ...brandMark(contentWidth, beside), blankRow()];
-    const note = noticeRow(screen.notice);
-    if (note) out.push(note, blankRow());
-    if (screen.items.length > 0) {
-      out.push(...connectionTable(screen.items, screen.selected, tokens, contentWidth, listLimit, now));
-      out.push(blankRow());
-    }
-    out.push(...footerRows(contentWidth, screen.items.length > 0));
-    return out;
+    return beside;
   };
 
   const promptTop = rows - PROMPT_BLOCK;
@@ -1038,14 +1061,41 @@ function renderHome(screen: Extract<Screen, { kind: 'connections' }>, view: Rend
   const menuTop = menuOpen && menu ? promptTop - FRAME_GAP - menu.lines.length : promptTop;
   const cardBottom = menuOpen ? menuTop - FRAME_GAP : promptTop - FRAME_GAP;
   const maxInner = Math.max(1, cardBottom - 2);
+
+  const brand = brandMark(contentWidth, intro());
+  const note = noticeRow(screen.notice);
+  const footer = footerRows(contentWidth, screen.items.length > 0);
+  // Bigger to smaller: the boxed details, the same rows without the box, one line.
+  const extraTiers: Row[][] =
+    screen.items.length === 0
+      ? [gettingStarted(contentWidth)]
+      : selectedItem
+        ? [detailsBox(selectedItem, contentWidth, view.home, now), detailsRows(selectedItem, contentWidth, view.home, now), [detailsLine(selectedItem, contentWidth, view.home, now)]]
+        : [];
+  const tableFor = (limit: number) => (screen.items.length > 0 ? connectionTable(screen.items, screen.selected, tokens, contentWidth, limit, now) : []);
+  // The compact layout: one blank row between the parts, nothing extra.
+  const compact = (table: Row[]): Row[] => {
+    const out: Row[] = [blankRow(), ...brand, blankRow()];
+    if (note) out.push(note, blankRow());
+    if (table.length) out.push(...table, blankRow());
+    out.push(...footer);
+    return out;
+  };
   let listLimit = screen.items.length;
-  let inner = build(listLimit);
+  let table = tableFor(listLimit);
+  let inner = compact(table);
   while (inner.length > maxInner && listLimit > 1) {
     listLimit -= 1;
-    inner = build(listLimit);
+    table = tableFor(listLimit);
+    inner = compact(table);
   }
-  inner = squeeze(inner, maxInner);
-  while (inner.length < maxInner) inner.push(blankRow());
+  if (inner.length <= maxInner) {
+    const extras = extraTiers.find((tier) => inner.length + tier.length + 1 <= maxInner) ?? [];
+    inner = spreadHome(brand, note, table, extras, footer, maxInner);
+  } else {
+    inner = squeeze(inner, maxInner);
+    while (inner.length < maxInner) inner.push(blankRow());
+  }
 
   const card = frameCard(inner, left, innerWidth, cols, 'border');
   const prompt = framePrompt(screen.command, view, left, innerWidth, cols);
@@ -1063,6 +1113,122 @@ function renderHome(screen: Extract<Screen, { kind: 'connections' }>, view: Rend
     });
   }
   return { lines, cursor: { row: promptTop + 1, col: prompt.cursorCol }, links };
+}
+
+/**
+ * The home card on a terminal with room to spare: the key hints sit at the
+ * bottom, the parts get a little more air, and what is left centers the
+ * brand, list and details in the space above the hints.
+ */
+function spreadHome(brand: Row[], note: Row | undefined, table: Row[], extras: Row[], footer: Row[], height: number): Row[] {
+  const parts: Row[][] = [brand];
+  if (note) parts.push([note]);
+  if (table.length) parts.push(table);
+  if (extras.length) parts.push(extras);
+  const content = parts.reduce((sum, part) => sum + part.length, 0);
+  let spare = height - content - footer.length;
+  // Blank rows above the first part, between parts and above the hints.
+  const slots = parts.length + 1;
+  const gap = spare >= slots * 2 + 2 ? 2 : spare >= slots ? 1 : 0;
+  spare -= gap * slots;
+  const below = spare >= 2 ? 1 : 0;
+  spare -= below;
+  const top = Math.floor(Math.max(0, spare) / 2);
+  spare -= top;
+  const out: Row[] = [];
+  const blanks = (count: number) => {
+    for (let index = 0; index < count; index += 1) out.push(blankRow());
+  };
+  blanks(gap + top);
+  parts.forEach((part, index) => {
+    if (index > 0) blanks(gap);
+    out.push(...part);
+  });
+  blanks(gap + Math.max(0, spare));
+  out.push(...footer);
+  blanks(below);
+  return out.slice(0, height);
+}
+
+type Detail = [label: string, value: string, tone: Tone];
+
+/** The selected connection in full: where, how it signs in, the jump host, when it was used. */
+function detailsOf(item: ConnectionItem, home: string, now: number): { left: Detail[]; right: Detail[] } {
+  const key = item.keyPath ? shortenPath(item.keyPath, home, 40) : '';
+  const signIn =
+    item.auth === 'privateKey'
+      ? `Key ${key || 'file'}`
+      : item.auth === 'password'
+        ? item.askPassword
+          ? 'Password, asked at every connect'
+          : 'Password, stored securely'
+        : 'SSH agent';
+  const jump = item.jumpHosts ? (item.via && item.via !== item.jumpHosts ? `${item.via} (${item.jumpHosts})` : item.jumpHosts) : 'None, direct connection';
+  const host = item.username && item.host ? `${item.username}@${item.host}` : item.userHost;
+  return {
+    left: [
+      ['Host', host, 'text'],
+      ['Sign-in', signIn, authToneOf(item.auth)],
+      ['Jump host', jump, item.jumpHosts ? 'text' : 'muted'],
+    ],
+    right: [
+      ['Port', String(item.port ?? (/:(\d+)$/.exec(item.userHost)?.[1] ?? 22)), 'text'],
+      ['Last used', relativeTime(item.lastUsed, now) || 'Never', item.lastUsed ? 'accent2' : 'muted'],
+      ['Start in', item.startPath || 'Home folder', item.startPath ? 'text' : 'muted'],
+    ],
+  };
+}
+
+/** Label and value rows, in two columns when there is room. */
+function detailBody(item: ConnectionItem, inner: number, home: string, now: number): Row[] {
+  const { left, right } = detailsOf(item, home, now);
+  const labelWidth = 11;
+  const cell = ([label, value, tone]: Detail, size: number): Piece[] => [
+    { text: label.padEnd(labelWidth), tone: 'muted' },
+    { text: truncate(value, Math.max(1, size - labelWidth)), tone },
+  ];
+  if (inner < 78) return [left[0], right[0], left[1], left[2], right[1]].map((entry) => ({ pieces: cell(entry, inner) }));
+  const rightSize = Math.min(34, Math.floor((inner - 2) / 2));
+  const leftSize = inner - rightSize - 2;
+  return left.map((entry, index) => {
+    const pieces = cell(entry, leftSize);
+    const used = pieces.reduce((sum, piece) => sum + displayWidth(piece.text), 0);
+    pieces.push({ text: ' '.repeat(Math.max(0, leftSize - used) + 2) }, ...cell(right[index], rightSize));
+    return { pieces };
+  });
+}
+
+function detailsBox(item: ConnectionItem, width: number, home: string, now: number): Row[] {
+  return innerBox(item.name, detailBody(item, Math.max(4, width - 2) - 1, home, now), width, 'border');
+}
+
+/** The details without the box, indented like the table. */
+function detailsRows(item: ConnectionItem, width: number, home: string, now: number): Row[] {
+  return detailBody(item, Math.max(4, width - 2), home, now).map((row) => ({ pieces: [{ text: '  ' }, ...row.pieces] }));
+}
+
+/** One line: sign-in, jump host and start folder, the parts the table does not show. */
+function detailsLine(item: ConnectionItem, width: number, home: string, now: number): Row {
+  const { left, right } = detailsOf(item, home, now);
+  const pieces: Piece[] = [{ text: '  ' }];
+  for (const [label, value, tone] of [left[1], left[2], right[2]]) {
+    if (pieces.length > 1) pieces.push({ text: ' · ', tone: 'muted' });
+    pieces.push({ text: `${label} `, tone: 'muted' }, { text: value, tone });
+  }
+  return { pieces: clipPieces(pieces, width) };
+}
+
+/** What to do first, for an empty list. */
+function gettingStarted(width: number): Row[] {
+  const steps: [string, string][] = [
+    ['/new', 'Add a connection step by step, then test it before saving'],
+    ['/import', 'Bring in the hosts from ~/.ssh/config'],
+    ['/theme', 'Switch between Auto, Dark and Light colors'],
+  ];
+  const body: Row[] = steps.map(([command, text]) => ({
+    pieces: [{ text: command.padEnd(10), tone: 'accent', bold: true }, { text, tone: 'muted' }],
+  }));
+  return innerBox('Getting started', body, width, 'border');
 }
 
 function framePrompt(command: string, view: RenderView, left: number, innerWidth: number, cols: number): { lines: PaintedLine[]; cursorCol: number } {

@@ -42,7 +42,6 @@ import {
   colorCode,
   DEFAULT_THEME,
   nextThemeChoice,
-  paletteFor,
   resolveThemeKind,
   SESSION_COLOR_RESET,
   oscColor,
@@ -51,6 +50,7 @@ import {
   themeLabel,
   type PaintTheme,
 } from './theme';
+import { resolvePalette } from './palettes';
 import {
   applyChoice,
   applyStep,
@@ -140,6 +140,13 @@ export function describe(record: ConnectionRecord, all: ConnectionRecord[] = [],
     auth: record.auth,
     via,
     lastUsed,
+    host: record.host,
+    port: record.port,
+    username: record.username,
+    keyPath: record.auth === 'privateKey' ? record.privateKeyPath : undefined,
+    jumpHosts: record.jumps.length ? record.jumps.map((jump) => `${jump.username ? `${jump.username}@` : ''}${jump.host}:${jump.port}`).join(', ') : undefined,
+    askPassword: record.askPassword,
+    startPath: record.startPath,
   };
 }
 
@@ -1019,7 +1026,7 @@ export class EasySshApp {
   private paintTheme(): PaintTheme {
     const state = this.host.theme?.();
     if (!state) return DEFAULT_THEME;
-    return { palette: paletteFor(resolveThemeKind(state.choice, state.editorKind)), depth: state.depth };
+    return { palette: resolvePalette(resolveThemeKind(state.choice, state.editorKind), state.variant), depth: state.depth };
   }
 
   private onShellChunk(chunk: string): void {
@@ -1294,7 +1301,8 @@ export class EasySshApp {
       return reset;
     }
     this.sessionPainted = true;
-    return sessionColorSequence(sessionColorsFor(resolveThemeKind(state.choice, state.editorKind)));
+    const kind = resolveThemeKind(state.choice, state.editorKind);
+    return sessionColorSequence(sessionColorsFor(kind, state.variant ? resolvePalette(kind, state.variant) : undefined));
   }
 
   /** Show bytes in the terminal and keep a copy for click hit-testing. */

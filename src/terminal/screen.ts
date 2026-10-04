@@ -14,6 +14,15 @@ export interface ConnectionItem {
   via?: string;
   /** Milliseconds since the epoch of the last successful connect. */
   lastUsed?: number;
+  /** For the details box under the list. */
+  host?: string;
+  port?: number;
+  username?: string;
+  keyPath?: string;
+  /** Jump hosts as user@host:port, comma-separated. */
+  jumpHosts?: string;
+  askPassword?: boolean;
+  startPath?: string;
 }
 
 /** The result of Test connection on the summary. */

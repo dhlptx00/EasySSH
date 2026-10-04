@@ -14,6 +14,7 @@ import type {
 import type { ActionMenu, FileAction, TreeCount } from './actions';
 import type { UploadQuestion } from './cwdTracking';
 import type { ColorDepth, ThemeChoice, ThemeKind } from './theme';
+import type { PaletteVariant } from './palettes';
 
 export interface FileSession {
   list(dir: string): Promise<BrowseEntry[]>;
@@ -184,7 +185,7 @@ export interface AppHost {
   /** Remember a successful connect for the Recent line and the Last used column. */
   markUsed?(id: string): Promise<void>;
   /** The Easy SSH palette: the user's choice, VS Code's theme kind, and the color depth. */
-  theme?(): { choice: ThemeChoice; editorKind: ThemeKind; depth: ColorDepth; session?: boolean };
+  theme?(): { choice: ThemeChoice; editorKind: ThemeKind; depth: ColorDepth; session?: boolean; variant?: PaletteVariant };
   /** Store a /theme choice (globalState and the easySsh.theme setting). */
   setTheme?(choice: ThemeChoice): Promise<void>;
   /**

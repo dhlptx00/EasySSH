@@ -110,10 +110,12 @@ describe('session colors', () => {
   for (const kind of ['dark', 'light'] as const) {
     it(`keeps ${kind} session text and ANSI colors readable`, () => {
       const colors = sessionColorsFor(kind);
-      assert.ok(contrast(colors.foreground, colors.background) >= 7);
+      const { foreground, background } = colors;
+      assert.ok(foreground && background);
+      assert.ok(contrast(foreground, background) >= 7);
       // Red, green, yellow, blue, magenta, cyan and their bright versions.
       for (const index of [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14]) {
-        assert.ok(contrast(colors.ansi[index], colors.background) >= 4.5, `ANSI ${index}`);
+        assert.ok(contrast(colors.ansi[index], background) >= 4.5, `ANSI ${index}`);
       }
     });
   }

@@ -264,6 +264,7 @@ With SSH agent sign-in, Easy SSH tries the agent first, then `~/.ssh/id_ed25519`
 | `easySsh.theme` | `auto` | Easy SSH colors: `auto` (follow VS Code), `dark` or `light`; `/theme` changes it |
 | `easySsh.colorDepth` | `truecolor` | Colors the Easy SSH screens use: `truecolor`, `256` or `16` |
 | `easySsh.themeSession` | `true` | Also color connected shells in Easy SSH terminals with the Easy SSH theme |
+| `easySsh.devPalette` | `""` | Temporary, for reviewing color options (A to F). Will be removed |
 
 ## How it compares
 

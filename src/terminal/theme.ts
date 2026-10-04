@@ -34,15 +34,27 @@ export type Role =
 
 export type Rgb = readonly [number, number, number];
 
+/**
+ * How a selected row looks: a solid bar with its own text colors, a soft tint
+ * that keeps the row's colors, or no fill and a ▌ marker with bold text.
+ */
+export type SelectStyle = 'bar' | 'tint' | 'marker';
+
 export interface Palette {
   kind: ThemeKind;
   /** Display name, e.g. "Easy SSH Dark". */
   name: string;
   fg: Record<Role, Rgb>;
-  /** Background inside the Easy SSH boxes. */
-  panel: Rgb;
-  /** The selected row's full-width bar. */
+  /** Background inside the Easy SSH boxes. Unset: the terminal's own background. */
+  panel?: Rgb;
+  /** The background the colors were picked for when there is no panel (VS Code's default). */
+  canvas?: Rgb;
+  /** The selected row's full-width bar (bar and tint styles). */
   selection: Rgb;
+  /** Bar by default. */
+  selectStyle?: SelectStyle;
+  /** Color of the › (or ▌) selection marker. The accent by default. */
+  marker?: Role;
   /** The bar of a selected destructive choice (Yes, delete). */
   danger: Rgb;
   /** The brand badge runs from this color to accent2's hue. */
@@ -55,7 +67,7 @@ export function hex(value: string): Rgb {
   return [parseInt(clean.slice(0, 2), 16), parseInt(clean.slice(2, 4), 16), parseInt(clean.slice(4, 6), 16)];
 }
 
-export const DARK: Palette = {
+export const DARK: Palette & { panel: Rgb } = {
   kind: 'dark',
   name: 'Easy SSH Dark',
   fg: {
@@ -78,7 +90,7 @@ export const DARK: Palette = {
   badgeTo: hex('#EC4899'),
 };
 
-export const LIGHT: Palette = {
+export const LIGHT: Palette & { panel: Rgb } = {
   kind: 'light',
   name: 'Easy SSH Light',
   fg: {
@@ -123,6 +135,11 @@ export function resolveThemeKind(choice: ThemeChoice, editorKind: ThemeKind): Th
 
 export function paletteFor(kind: ThemeKind): Palette {
   return kind === 'light' ? LIGHT : DARK;
+}
+
+/** What the palette's colors sit on: its panel, or the terminal background it was picked for. */
+export function surfaceOf(palette: Palette): Rgb {
+  return palette.panel ?? palette.canvas ?? (palette.kind === 'light' ? hex('#FFFFFF') : hex('#1F1F1F'));
 }
 
 /** "Auto (Easy SSH Light)", "Easy SSH Dark". */
@@ -227,8 +244,9 @@ export const DEFAULT_THEME: PaintTheme = { palette: DARK, depth: 'truecolor' };
 // ---- connected shell sessions ----
 
 export interface SessionColors {
-  background: Rgb;
-  foreground: Rgb;
+  /** Unset: keep the terminal's own background and text color. */
+  background?: Rgb;
+  foreground?: Rgb;
   cursor: Rgb;
   /** ANSI 0-15: black, red, green, yellow, blue, magenta, cyan, white, then the bright ones. */
   ansi: Rgb[];
@@ -254,8 +272,19 @@ const LIGHT_SESSION: SessionColors = {
   ].map(hex),
 };
 
-export function sessionColorsFor(kind: ThemeKind): SessionColors {
-  return kind === 'light' ? LIGHT_SESSION : DARK_SESSION;
+/**
+ * Colors for a connected shell. With a palette, its panel, text and pink; a
+ * palette without a panel leaves the terminal's background and text alone.
+ */
+export function sessionColorsFor(kind: ThemeKind, palette?: Palette): SessionColors {
+  const base = kind === 'light' ? LIGHT_SESSION : DARK_SESSION;
+  if (!palette) return base;
+  return {
+    background: palette.panel,
+    foreground: palette.panel ? palette.fg.text : undefined,
+    cursor: palette.fg.accent2,
+    ansi: base.ansi,
+  };
 }
 
 export function oscColor(rgb: Rgb): string {
@@ -268,7 +297,10 @@ export function oscColor(rgb: Rgb): string {
  * them to that terminal only; other terminals and the settings do not change.
  */
 export function sessionColorSequence(colors: SessionColors): string {
-  let out = `\x1b]10;${oscColor(colors.foreground)}\x07\x1b]11;${oscColor(colors.background)}\x07\x1b]12;${oscColor(colors.cursor)}\x07`;
+  let out = '';
+  if (colors.foreground) out += `\x1b]10;${oscColor(colors.foreground)}\x07`;
+  if (colors.background) out += `\x1b]11;${oscColor(colors.background)}\x07`;
+  out += `\x1b]12;${oscColor(colors.cursor)}\x07`;
   colors.ansi.forEach((rgb, index) => {
     out += `\x1b]4;${index};${oscColor(rgb)}\x07`;
   });
