@@ -10,7 +10,7 @@ import {
   renameSelection,
   shortRemote,
   targetSummary,
-  terminalCommand,
+  largeOpenQuestion,
   uploadDir,
   type ActionTarget,
   type FileAction,
@@ -20,17 +20,17 @@ const file: ActionTarget = { name: 'report.log', path: '/var/log/app/report.log'
 const folder: ActionTarget = { name: 'logs', path: '/home/demo/project/logs', kind: 'folder' };
 
 describe('action menu', () => {
-  it('lists Download first, then View, Edit, Rename, and Delete last under a separator, for a file (no Upload)', () => {
+  it('lists Download first, then Open, Rename, and Delete last under a separator, for a file (no Upload)', () => {
     const menu = actionMenu(file, { downloadLabel: '~/Downloads' });
     assert.equal(menu.title, 'report.log — /var/log/app');
-    assert.deepEqual(menu.items.map((item) => item.action ?? '---'), ['download', 'view', 'edit', '---', 'rename', '---', 'delete']);
-    assert.deepEqual(menu.items.filter((item) => !item.separator).map((item) => item.icon), ['cloud-download', 'eye', 'edit', 'pencil', 'trash']);
+    assert.deepEqual(menu.items.map((item) => item.action ?? '---'), ['download', 'open', '---', 'rename', '---', 'delete']);
+    assert.deepEqual(menu.items.filter((item) => !item.separator).map((item) => item.icon), ['cloud-download', 'go-to-file', 'pencil', 'trash']);
     assert.ok(menu.items.every((item) => item.separator || item.description), 'every action says what it does');
     assert.match(menu.items[0].description ?? '', /~\/Downloads/);
     assert.match(menu.placeholder, /^File · 48 MB/);
   });
 
-  it('has Upload but no View or Edit for a folder, and uploads into the folder itself', () => {
+  it('has Upload but no Open for a folder, and uploads into the folder itself', () => {
     const menu = actionMenu(folder, { downloadLabel: '~/Downloads', items: 'counting' });
     assert.equal(menu.title, 'logs — /home/demo/project');
     assert.deepEqual(menu.items.map((item) => item.action ?? '---'), ['download', 'upload', '---', 'rename', '---', 'delete']);
@@ -54,9 +54,10 @@ describe('action menu', () => {
   it('drops actions a session cannot do without leaving stray separators', () => {
     const menu = actionMenu(file, { downloadLabel: '~' });
     const only = (can: FileAction[]) => onlyActions(menu.items, new Set(can)).map((item) => item.action ?? '---');
-    assert.deepEqual(only(['download', 'view']), ['download', 'view']);
+    assert.deepEqual(only(['download', 'open']), ['download', 'open']);
     assert.deepEqual(only(['download', 'delete']), ['download', '---', 'delete']);
-    assert.deepEqual(only(['download', 'upload', 'view', 'edit', 'rename', 'delete']), ['download', 'view', 'edit', '---', 'rename', '---', 'delete']);
+    assert.deepEqual(only(['download', 'rename', 'delete']), ['download', '---', 'rename', '---', 'delete']);
+    assert.deepEqual(only(['download', 'upload', 'open', 'rename', 'delete']), ['download', 'open', '---', 'rename', '---', 'delete']);
   });
 });
 
@@ -109,12 +110,11 @@ describe('delete confirmation', () => {
   });
 });
 
-describe('view and edit command lines', () => {
-  it('quotes the absolute path for the shell', () => {
-    assert.equal(terminalCommand('view', '/home/demo/project/notes.txt', 'bash'), "cat '/home/demo/project/notes.txt'");
-    assert.equal(terminalCommand('edit', "/srv/it's here.txt", 'zsh'), "vi '/srv/it'\\''s here.txt'");
-    assert.equal(terminalCommand('edit', "/srv/it's here.txt", 'fish'), "vi '/srv/it\\'s here.txt'");
-    assert.equal(terminalCommand('view', '/tmp/$(rm -rf ~).txt', 'bash'), "cat '/tmp/$(rm -rf ~).txt'");
+describe('open and button texts', () => {
+  it('asks before opening a big text file, with its size', () => {
+    const question = largeOpenQuestion(file, 48 * 1024 * 1024);
+    assert.equal(question.message, '"report.log" is 48 MB. Open it in an editor?');
+    assert.match(question.detail, /^\/var\/log\/app\/report\.log/);
   });
 
   it('shortens a long remote folder for a button', () => {

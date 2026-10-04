@@ -11,7 +11,20 @@ const entries: BrowseEntry[] = [
   { name: 'logs', path: `${HOME}/logs`, kind: 'dir', size: 0, mtime: 0 },
   { name: 'notes.txt', path: `${HOME}/notes.txt`, kind: 'file', size: 120, mtime: 0 },
   { name: "it's big.log", path: `${HOME}/it's big.log`, kind: 'file', size: 30 * 1024 * 1024, mtime: 0 },
+  { name: 'backup.tar.gz', path: `${HOME}/backup.tar.gz`, kind: 'file', size: 4096, mtime: 0 },
+  { name: 'run', path: `${HOME}/run`, kind: 'file', size: 9000, mtime: 0 },
+  { name: 'notes', path: `${HOME}/notes`, kind: 'file', size: 50, mtime: 0 },
+  { name: 'stuck', path: `${HOME}/stuck`, kind: 'file', size: 50, mtime: 0 },
+  { name: 'broken', path: `${HOME}/broken`, kind: 'file', size: 50, mtime: 0 },
 ];
+
+/** First bytes of the files the menu has to sniff. */
+const heads: Record<string, Buffer | 'slow' | 'fail'> = {
+  [`${HOME}/run`]: Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]),
+  [`${HOME}/notes`]: Buffer.from('remember the milk\n'),
+  [`${HOME}/stuck`]: 'slow',
+  [`${HOME}/broken`]: 'fail',
+};
 
 interface Script {
   /** The menu choice. */
@@ -22,6 +35,10 @@ interface Script {
   rename?: string;
   /** Answers to confirm(), in order. Missing answers are false. */
   confirms?: boolean[];
+  /** Answers to choose(), in order. Missing answers cancel. */
+  chooses?: (string | undefined)[];
+  /** openRemoteFile fails with this message. */
+  openFails?: string;
 }
 
 interface Rig {
@@ -38,7 +55,9 @@ interface Rig {
   renamed: [string, string][];
   removed: string[];
   progress: string[];
-  focused: number;
+  opened: string[];
+  chosen: { message: string; detail: string; answers: string[] }[];
+  sniffed: string[];
   script: Script;
 }
 
@@ -58,7 +77,9 @@ async function rig(script: Script = {}, options: { count?: TreeCount; existing?:
     renamed: [],
     removed: [],
     progress: [],
-    focused: 0,
+    opened: [],
+    chosen: [],
+    sniffed: [],
     script,
   };
   const session = remote.session;
@@ -81,6 +102,16 @@ async function rig(script: Script = {}, options: { count?: TreeCount; existing?:
     return { files: 12, folders: 4 };
   };
   session.countTree = async () => options.count ?? { files: 12, folders: 3, capped: false };
+  session.readHead = async (path) => {
+    state.sniffed.push(path);
+    const head = heads[path];
+    if (head === 'slow') return new Promise<Buffer>(() => {});
+    if (head === 'fail' || head === undefined) throw new Error('read failed');
+    return head;
+  };
+  session.readWhole = async () => ({ data: Buffer.from('x'), stat: { kind: 'file', size: 1, mtime: 0 } });
+  session.writeWhole = async () => ({ kind: 'file', size: 1, mtime: 0 });
+  const chooses = [...(script.chooses ?? [])];
   const confirms = [...(script.confirms ?? [])];
   const host: AppHost = {
     ...remote.host,
@@ -110,8 +141,13 @@ async function rig(script: Script = {}, options: { count?: TreeCount; existing?:
       return confirms.shift() ?? false;
     },
     showProgress: (title: string): ProgressHandle => ({ report: (text) => state.progress.push(`${title}: ${text}`), close: () => {} }),
-    focusTerminal: () => {
-      state.focused += 1;
+    openRemoteFile: async (path) => {
+      if (state.script.openFails) throw new Error(state.script.openFails);
+      state.opened.push(path);
+    },
+    choose: async (message, detail, answers) => {
+      state.chosen.push({ message, detail, answers });
+      return chooses.shift();
     },
   };
   const app = new EasySshApp(host, () => {});
@@ -139,14 +175,14 @@ describe('Ctrl+click action menu', () => {
     await click(r, `${HOME}/notes.txt`);
     assert.equal(r.menus.length, 1);
     assert.equal(r.menus[0].title, `notes.txt — ${HOME}`);
-    assert.deepEqual(r.menus[0].items.map((item) => item.action ?? '---'), ['download', 'view', 'edit', '---', 'rename', '---', 'delete']);
+    assert.deepEqual(r.menus[0].items.map((item) => item.action ?? '---'), ['download', 'open', '---', 'rename', '---', 'delete']);
     assert.deepEqual(r.remote.downloads, []);
     assert.deepEqual(r.downloadsTo, []);
     assert.deepEqual(r.remote.written.filter((line) => !line.includes('PROMPT')), []);
     r.app.dispose();
   });
 
-  it('counts a folder\'s items for the placeholder and offers Upload but no View or Edit', async () => {
+  it('counts a folder\'s items for the placeholder and offers Upload but no Open', async () => {
     const r = await rig();
     await click(r, `${HOME}/logs`);
     assert.deepEqual(r.menus[0].items.map((item) => item.action ?? '---'), ['download', 'upload', '---', 'rename', '---', 'delete']);
@@ -158,7 +194,7 @@ describe('Ctrl+click action menu', () => {
   it('links names with a tooltip and hint that list the actions', async () => {
     const r = await rig();
     const links = r.app.linkFor('logs notes.txt');
-    assert.deepEqual(links.map((link) => link.tooltip).sort(), ['Folder logs: download, upload into, rename, delete', 'notes.txt: download, view, edit, rename, delete']);
+    assert.deepEqual(links.map((link) => link.tooltip).sort(), ['Folder logs: download, upload into, rename, delete', 'notes.txt: download, open, rename, delete']);
     r.app.dispose();
   });
 });
@@ -218,68 +254,77 @@ describe('Upload from the menu', () => {
   });
 });
 
-describe('View and Edit from the menu', () => {
-  it('types cat or vi with the quoted absolute path at the prompt', async () => {
-    const r = await rig({ pick: 'view' });
+describe('Open from the menu (editor tab)', () => {
+  const actions = (r: Rig) => r.menus[0].items.map((item) => item.action ?? '---');
+
+  it('opens a text file in an editor tab, without reading it first by name', async () => {
+    const r = await rig({ pick: 'open' });
     await click(r, `${HOME}/notes.txt`);
-    assert.equal(r.remote.written.at(-1), `cat '${HOME}/notes.txt'\r`);
-    assert.equal(r.focused, 1);
-    r.remote.push(`hello\r\n\x1b]7;${HOME}\x07$ `);
-    await flush();
-    r.script.pick = 'edit';
-    await sleep(310);
-    await click(r, `${HOME}/notes.txt`);
-    assert.equal(r.remote.written.at(-1), `vi '${HOME}/notes.txt'\r`);
+    assert.deepEqual(actions(r), ['download', 'open', '---', 'rename', '---', 'delete']);
+    assert.deepEqual(r.opened, [`${HOME}/notes.txt`]);
+    assert.deepEqual(r.chosen, []);
+    assert.deepEqual(r.sniffed, []);
     r.app.dispose();
   });
 
-  it('asks before printing a big file', async () => {
-    const r = await rig({ pick: 'view', confirms: [false] });
-    await click(r, `${HOME}/it's big.log`);
-    assert.match(r.confirms[0].message, /^Print all 30 MB of "it's big\.log" in the terminal\?$/);
-    assert.ok(!r.remote.written.some((line) => line.startsWith('cat ')));
-    r.app.dispose();
-    const yes = await rig({ pick: 'view', confirms: [true] });
-    await click(yes, `${HOME}/it's big.log`);
-    assert.equal(yes.remote.written.at(-1), `cat '${HOME}/it'\\''s big.log'\r`);
-    yes.app.dispose();
-  });
-
-  it('types nothing while a full-screen program runs or text is typed at the prompt', async () => {
-    const r = await rig({ pick: 'edit' });
-    // A program started (e.g. top) while the menu was open.
-    r.script.pick = undefined;
-    const menuHost = r.app as unknown as { host: AppHost };
-    const show = menuHost.host.showActionMenu;
-    menuHost.host.showActionMenu = async (menu, update) => {
-      await show?.(menu, update);
-      r.remote.push('\x1b[?1049h');
-      return 'edit';
-    };
-    await click(r, `${HOME}/notes.txt`);
-    menuHost.host.showActionMenu = show;
-    r.script.pick = 'edit';
-    assert.ok(!r.remote.written.some((line) => line.startsWith('vi ')));
-    assert.match(r.remote.notes.at(-1)?.text ?? '', /A program is running in the terminal/);
-    r.remote.push(`\x1b[?1049l\x1b]7;${HOME}\x07$ `);
-    await flush();
-    r.app.onRawInput('ls -');
-    await sleep(60);
-    await sleep(300);
-    await click(r, `${HOME}/notes.txt`);
-    assert.ok(!r.remote.written.some((line) => line.startsWith('vi ')));
-    assert.match(r.remote.notes.at(-1)?.text ?? '', /Text is typed at the terminal prompt/);
+  it('hides Open for a binary file by name: Download, Rename, Delete', async () => {
+    const r = await rig();
+    await click(r, `${HOME}/backup.tar.gz`);
+    assert.deepEqual(actions(r), ['download', '---', 'rename', '---', 'delete']);
+    assert.deepEqual(r.sniffed, []);
     r.app.dispose();
   });
 
-  it('asks before typing while an earlier command has not returned to the prompt', async () => {
-    const r = await rig({ pick: 'view', confirms: [false] });
-    r.app.onRawInput('tail -f x.log\r');
-    await sleep(60);
+  it('sniffs a name it does not know: NUL bytes hide Open, text shows it', async () => {
+    const binary = await rig();
+    await click(binary, `${HOME}/run`);
+    assert.deepEqual(binary.sniffed, [`${HOME}/run`]);
+    assert.ok(!binary.menus[0].items.some((item) => item.action === 'open'));
+    binary.app.dispose();
+    const text = await rig();
+    await click(text, `${HOME}/notes`);
+    assert.ok(text.menus[0].items.some((item) => item.action === 'open'));
+    text.app.dispose();
+  });
+
+  it('shows Open when the sniff fails or is slow', async () => {
+    const failed = await rig();
+    await click(failed, `${HOME}/broken`);
+    assert.ok(failed.menus[0].items.some((item) => item.action === 'open'));
+    failed.app.dispose();
+    const slow = await rig();
+    const started = Date.now();
+    await click(slow, `${HOME}/stuck`, 900);
+    assert.equal(slow.menus.length, 1);
+    assert.ok(slow.menus[0].items.some((item) => item.action === 'open'));
+    assert.ok(Date.now() - started < 2000);
+    assert.ok(slow.remote.logs.some((line) => line.includes('offering Open')));
+    slow.app.dispose();
+  });
+
+  it('asks before opening a text file over 5 MB: Open Anyway, Download, or Cancel', async () => {
+    const cancel = await rig({ pick: 'open' });
+    await click(cancel, `${HOME}/it's big.log`);
+    assert.equal(cancel.chosen.length, 1);
+    assert.equal(cancel.chosen[0].message, '"it\'s big.log" is 30 MB. Open it in an editor?');
+    assert.deepEqual(cancel.chosen[0].answers, ['Open Anyway', 'Download']);
+    assert.deepEqual(cancel.opened, []);
+    cancel.app.dispose();
+    const anyway = await rig({ pick: 'open', chooses: ['Open Anyway'] });
+    await click(anyway, `${HOME}/it's big.log`);
+    assert.deepEqual(anyway.opened, [`${HOME}/it's big.log`]);
+    anyway.app.dispose();
+    const download = await rig({ pick: 'open', chooses: ['Download'] });
+    await click(download, `${HOME}/it's big.log`);
+    assert.deepEqual(download.opened, []);
+    assert.deepEqual(download.saves, [['C:\\Users\\me\\Desktop', "it's big.log"]]);
+    download.app.dispose();
+  });
+
+  it('reports a file that cannot be opened', async () => {
+    const r = await rig({ pick: 'open', openFails: 'notes.txt does not exist on demo' });
     await click(r, `${HOME}/notes.txt`);
-    assert.match(r.confirms[0].message, /"tail -f x\.log" may still be running/);
-    assert.equal(r.confirms[0].action, 'Send Anyway');
-    assert.ok(!r.remote.written.some((line) => line.startsWith('cat ')));
+    assert.ok(r.remote.notes.some((note) => note.tone === 'error' && note.text.includes('Could not open notes.txt')));
     r.app.dispose();
   });
 });

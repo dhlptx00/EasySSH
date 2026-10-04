@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 /** Just enough of the vscode API for the controller to open terminals and provide links. */
 const created: { name: string; exitStatus: undefined; show(): void }[] = [];
 const commandLog: string[] = [];
+const shownDocuments: string[] = [];
 let onCommand: (command: string) => void = () => {};
 const config: Record<string, unknown> = { maximizePanel: false };
 const vscodeStub = {
@@ -22,7 +23,14 @@ const vscodeStub = {
   ProgressLocation: { Notification: 15 },
   StatusBarAlignment: { Left: 1 },
   ConfigurationTarget: { Global: 1 },
+  Uri: {
+    from: (parts: { scheme: string; authority: string; path: string }) => ({ ...parts, toString: () => `${parts.scheme}://${parts.authority}${parts.path}` }),
+  },
   window: {
+    showTextDocument: async (uri: { toString(): string }) => {
+      shownDocuments.push(uri.toString());
+      return undefined;
+    },
     activeTerminal: undefined,
     createTerminal: (options: { name: string }) => {
       const terminal = { name: options.name, exitStatus: undefined, show() {} };
@@ -178,5 +186,44 @@ describe('controller: panel maximize (B10)', () => {
     controller.onClosed(live.terminal);
     assert.equal(commandLog.filter((item) => item === MAX).length, 0);
     restore();
+  });
+});
+
+describe('controller: remote files in editor tabs', () => {
+  it('names a terminal\'s files easyssh://<connection>/<path>, numbered when two terminals share a connection', async () => {
+    const { EasySshController, editorAuthority } = await import('./controller');
+    assert.equal(editorAuthority('web-01'), 'web-01');
+    assert.equal(editorAuthority('My Server (prod)'), 'My-Server-prod');
+    assert.equal(editorAuthority('***'), 'server');
+    const status = { text: '', tooltip: '', command: '', show() {}, hide() {} };
+    const output = { appendLine() {}, show() {} };
+    const controller = new EasySshController({} as never, output as never, status as never);
+    controller.newTerminal();
+    controller.newTerminal();
+    const lives = (controller as unknown as { lives: { app: Record<string, unknown> }[] }).lives.slice(-2);
+    const sessions = [{ name: 'left' }, null];
+    lives.forEach((live, index) => {
+      live.app.connectionLabel = () => 'web-01';
+      live.app.editorSession = () => (sessions[index] ? { ...sessions[index], readWhole() {}, writeWhole() {}, makeDir() {}, stat() {}, remove() {}, rename() {} } : null);
+    });
+    const hostOf = (live: { app: Record<string, unknown> }) => (live.app as unknown as { host: { openRemoteFile(path: string): Promise<void> } }).host;
+    await hostOf(lives[0]).openRemoteFile('/etc/hosts');
+    await hostOf(lives[1]).openRemoteFile('/etc/hosts');
+    assert.deepEqual(shownDocuments.slice(-2), ['easyssh://web-01/etc/hosts', 'easyssh://web-01-2/etc/hosts']);
+    // The second terminal is disconnected: its files say so.
+    await assert.rejects(controller.remoteFiles.read('web-01-2', '/etc/hosts'), /web-01 is disconnected/);
+    await assert.rejects(controller.remoteFiles.read('web-01-3', '/etc/hosts'), /is closed/);
+    // A tab restored after a reload goes to a new connected terminal for the same connection.
+    controller.newTerminal();
+    const third = (controller as unknown as { lives: { app: Record<string, unknown>; authority?: string }[] }).lives.slice(-1)[0];
+    third.app.connectionLabel = () => 'web-01';
+    third.app.editorSession = () => ({ readWhole() {}, writeWhole() {}, makeDir() {}, stat() {}, remove() {}, rename() {} });
+    const target = (controller as unknown as { editorTarget(authority: string): { label: string } | undefined }).editorTarget.bind(controller);
+    assert.equal(target('db-01'), undefined);
+    assert.equal(target('web-01-x'), undefined);
+    assert.equal(target('web-01-3')?.label, 'web-01');
+    assert.equal(third.authority, 'web-01-3');
+    // Once it has files, it does not take another connection's name.
+    assert.equal(target('web-01-4'), undefined);
   });
 });

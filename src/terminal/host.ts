@@ -40,6 +40,14 @@ export interface FileSession {
   remove?(remotePath: string, options: RemoveOptions): Promise<{ files: number; folders: number }>;
   /** Count what a folder holds, stopping at cap files or after timeoutMs. */
   countTree?(remotePath: string, options: { cap: number; timeoutMs: number }): Promise<TreeCount>;
+  /** Up to `bytes` bytes from the start of a file (to tell text from binary). */
+  readHead?(remotePath: string, bytes: number): Promise<Buffer>;
+  /** A whole file in memory, for an editor tab. */
+  readWhole?(remotePath: string, options: { maxBytes: number }): Promise<{ data: Buffer; stat: RemoteStat }>;
+  /** Save an editor's bytes, keeping the file's mode, owner and symlinks. */
+  writeWhole?(remotePath: string, data: Uint8Array, options: { create: boolean; overwrite: boolean }): Promise<RemoteStat>;
+  /** Create one folder. */
+  makeDir?(remotePath: string): Promise<void>;
   openShell(columns: number, rows: number, onData: (chunk: string) => void, onClose: () => void): Promise<void>;
   writeShell(data: string): void;
   resizeShell(columns: number, rows: number): void;
@@ -166,6 +174,8 @@ export interface AppHost {
   askRename?(request: RenameRequest): Promise<string | undefined>;
   /** A modal question with one action button (and Cancel). True when the button was chosen. */
   confirm?(message: string, detail: string, action: string): Promise<boolean>;
-  /** Move keyboard focus to this terminal, e.g. after vi opened in it. */
-  focusTerminal?(): void;
+  /** Open a remote file of this terminal's connection in an editor tab. */
+  openRemoteFile?(remotePath: string): Promise<void>;
+  /** A modal question with several answers. Undefined when cancelled. */
+  choose?(message: string, detail: string, answers: string[]): Promise<string | undefined>;
 }

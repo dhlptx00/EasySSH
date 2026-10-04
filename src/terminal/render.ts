@@ -1,5 +1,6 @@
 import { formatFingerprint, shortenPath, truncate, displayWidth } from '../text';
 import type { RowAnchor } from './viewport';
+import { classifyName } from '../fileTypes';
 import type { BrowseEntry, Notice } from '../types';
 import { assignConnectionTokens, matchSlashCommands, type SlashCommand, type SlashTarget } from './commands';
 import type { Screen } from './screen';
@@ -279,7 +280,7 @@ export function sessionHint(click = 'Click', menu = false): { plain: string; sty
   const reset = '\x1b[0m';
   const parts = [
     { text: click, color: gold },
-    { text: menu ? 'a file or folder name to download, view, edit, rename or delete it' : 'a file or folder name to download it', color: dim },
+    { text: menu ? 'a file or folder name to download, open, rename or delete it' : 'a file or folder name to download it', color: dim },
     { text: '·', color: dim },
     { text: 'drag files to upload', color: dim },
     { text: '·', color: dim },
@@ -315,7 +316,12 @@ export function linkAt(cells: readonly string[], column: number, entries: Browse
 /** The tooltip of a linked name: what a click does. */
 export function linkTooltip(entry: BrowseEntry, downloadLabel: string, menu: boolean): string {
   const folder = entry.kind === 'dir';
-  if (menu) return folder ? `Folder ${entry.name}: download, upload into, rename, delete` : `${entry.name}: download, view, edit, rename, delete`;
+  if (menu) {
+    if (folder) return `Folder ${entry.name}: download, upload into, rename, delete`;
+    const kind = classifyName(entry.name);
+    const open = kind === 'text' ? 'open, ' : kind === 'unknown' ? 'open (if text), ' : '';
+    return `${entry.name}: download, ${open}rename, delete`;
+  }
   return folder ? `Download folder ${entry.name} to ${downloadLabel}` : `Download ${entry.name} to ${downloadLabel}`;
 }
 

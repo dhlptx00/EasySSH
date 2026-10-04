@@ -16,14 +16,16 @@ import {
   renameQuestion,
   renameSelection,
   targetSummary,
-  terminalCommand,
   uploadDir,
-  VIEW_CONFIRM_BYTES,
+  largeOpenQuestion,
+  OPEN_ASK_BYTES,
+  SNIFF_MS,
   type ActionTarget,
   type FileAction,
   type TreeCount,
 } from './actions';
-import { formatSize, safeFileName, shortenPath } from '../text';
+import { safeFileName, shortenPath } from '../text';
+import { classifyName, looksLikeText, SNIFF_BYTES } from '../fileTypes';
 import type { BrowseEntry, ConflictChoice, ConnectionRecord, Notice, TransferProgress } from '../types';
 import type { AppHost, FileSession, ProgressHandle } from './host';
 import { formatProgress, progressFraction, wantsNotification } from './progress';
@@ -138,8 +140,8 @@ export class EasySshApp {
   private plainClick = false;
   private loginUser = '';
   private hostName = '';
-  /** The login shell family, for quoting View and Edit command lines. */
-  private shellKind: ShellKind = 'unknown';
+  /** The last connection's name, for messages about its editor tabs after it closed. */
+  private lastTitle: string | undefined;
   private listingTimer: ReturnType<typeof setTimeout> | undefined;
   private listingBusy = false;
   private listingAgain = false;
@@ -280,6 +282,17 @@ export class EasySshApp {
     const end = link.start + link.length;
     const under = now.filter((span) => span.start < end && link.start < span.start + span.length);
     return under.length === 1 ? { kind: 'ok', remotePath: under[0].remotePath } : { kind: 'stale' };
+  }
+
+  /** The connection an editor tab reads and saves through, while it is up. */
+  editorSession(): FileSession | null {
+    if (this.closed || !this.session || !this.remote || this.remote.lost || !this.remote.files) return null;
+    return this.session;
+  }
+
+  /** The connection's name, for messages about editor tabs. */
+  connectionLabel(): string {
+    return this.remote?.title ?? this.lastTitle ?? 'the server';
   }
 
   linkFor(line: string): LineLink[] {
@@ -1427,11 +1440,11 @@ export class EasySshApp {
     const notes = [...(opened.notes ?? [])];
     if (opened.usedFallbackPath) notes.push('Remote path was not found. Opened your home directory');
     this.remote = { title: record.name, cwd: opened.cwd, entries, files };
+    this.lastTitle = record.name;
     this.host.setStatus(files ? `${record.name}:${opened.cwd}` : `${record.name} (terminal only)`);
     this.host.setTitle?.(record.name);
     this.enterRaw(notes);
     const shell: ShellKind = opened.shell ?? 'unknown';
-    this.shellKind = shell;
     const wanted = restoreDir || (record.startPath && !opened.usedFallbackPath ? opened.cwd : undefined);
     this.hookLine = setupLine(shell, wanted);
     this.hookPhase = this.hookLine ? 'waiting' : 'done';
@@ -1589,13 +1602,10 @@ export class EasySshApp {
   }
 
   /** The menu actions this session supports for a target. */
-  private actionsFor(session: FileSession, target: ActionTarget): Set<FileAction> {
+  private actionsFor(session: FileSession, target: ActionTarget, text: boolean): Set<FileAction> {
     const can = new Set<FileAction>(['download']);
     if (target.kind === 'folder') can.add('upload');
-    if (target.kind === 'file' && session.hasShell()) {
-      can.add('view');
-      can.add('edit');
-    }
+    if (target.kind === 'file' && text && this.canEdit(session)) can.add('open');
     if (session.rename && this.host.askRename) can.add('rename');
     if (session.remove && this.host.confirm) can.add('delete');
     return can;
@@ -1611,8 +1621,10 @@ export class EasySshApp {
     const session = this.session;
     if (!session || !this.remote || !this.remote.files || !host.showActionMenu) return;
     const epoch = this.browseEpoch;
+    const text = target.kind === 'file' && this.canEdit(session) ? await this.isText(session, target) : false;
+    if (!this.alive(session, epoch)) return;
     const menu = actionMenu(target, { downloadLabel: this.downloadLabel(), items: target.kind === 'folder' ? 'counting' : undefined });
-    menu.items = onlyActions(menu.items, this.actionsFor(session, target));
+    menu.items = onlyActions(menu.items, this.actionsFor(session, target, text));
     const picked = await host.showActionMenu(menu, this.describeTarget(session, target));
     if (!picked || !this.alive(session, epoch)) return;
     this.host.log(`${picked} ${target.path}`);
@@ -1623,9 +1635,8 @@ export class EasySshApp {
       case 'upload':
         await this.menuUpload(session, epoch, target);
         return;
-      case 'view':
-      case 'edit':
-        await this.menuTerminal(session, epoch, target, picked);
+      case 'open':
+        await this.menuOpen(session, epoch, target);
         return;
       case 'rename':
         await this.menuRename(session, epoch, target);
@@ -1691,57 +1702,59 @@ export class EasySshApp {
     this.queueUpload(session, paths, dir, { menu: true });
   }
 
-  /**
-   * Whether a typed command line would reach a shell prompt. A full-screen program
-   * or typed text means no; a command the prompt hook has not answered may still run.
-   */
-  private shellState(): { kind: 'ready' } | { kind: 'program' } | { kind: 'typed' } | { kind: 'unsure'; why: string } {
-    if (this.remoteAlt) return { kind: 'program' };
-    if (this.hookPhase !== 'done') return { kind: 'unsure', why: 'The shell is still starting.' };
-    const line = this.inputLine.text();
-    if (line) return { kind: 'typed' };
-    if (this.cwdReports > 0 && this.awaitingSince !== undefined) {
-      const last = [...this.pendingCommands].reverse().find((command) => !!command);
-      return { kind: 'unsure', why: last ? `"${last}" may still be running in the terminal.` : 'A command may still be running in the terminal.' };
-    }
-    if (line === null) return { kind: 'unsure', why: 'Text may be typed at the prompt in the terminal.' };
-    return { kind: 'ready' };
+  /** Open needs an editor host and whole-file SFTP reads and writes. */
+  private canEdit(session: FileSession): boolean {
+    return this.host.openRemoteFile !== undefined && session.readWhole !== undefined && session.writeWhole !== undefined;
   }
 
-  /** View (cat) and Edit (vi): type the command into this terminal, at its prompt. */
-  private async menuTerminal(session: FileSession, epoch: number, target: ActionTarget, action: 'view' | 'edit'): Promise<void> {
-    const line = terminalCommand(action, target.path, this.shellKind);
-    const verb = action === 'view' ? 'View' : 'Edit';
-    const state = this.shellState();
-    if (state.kind === 'program') {
-      this.host.notify?.('info', `A program is running in the terminal. Quit it, then choose ${verb} again.`);
-      return;
-    }
-    if (state.kind === 'typed') {
-      this.host.notify?.('info', `Text is typed at the terminal prompt. Clear it (Ctrl+U), then choose ${verb} again.`);
-      return;
-    }
-    if (state.kind === 'unsure') {
-      const sure = this.host.confirm ? await this.host.confirm(state.why, `Easy SSH types this into the terminal:\n${line}`, 'Send Anyway') : true;
-      if (!sure || !this.alive(session, epoch)) return;
-    }
-    if (action === 'view') {
-      let size = target.size;
-      if (size === undefined && session.stat) size = await session.stat(target.linkTarget ?? target.path).then((found) => found.size).catch(() => undefined);
-      if (size !== undefined && size > VIEW_CONFIRM_BYTES && this.host.confirm) {
-        const sure = await this.host.confirm(
-          `Print all ${formatSize(size)} of "${target.name}" in the terminal?`,
-          'A big file takes a while to scroll past. Press Ctrl+C in the terminal to stop it, or choose Download instead.',
-          'View',
-        );
-        if (!sure) return;
+  /**
+   * Whether the menu offers Open: text by name, binary by name, otherwise by the
+   * first bytes (no NUL, valid UTF-8). A sniff that fails or is slow offers Open.
+   */
+  private async isText(session: FileSession, target: ActionTarget): Promise<boolean> {
+    const byName = classifyName(target.name);
+    if (byName !== 'unknown') return byName === 'text';
+    if (target.size === 0 || !session.readHead) return true;
+    const path = target.linkTarget ?? target.path;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), SNIFF_MS);
+    });
+    try {
+      const head = await Promise.race([session.readHead(path, SNIFF_BYTES).catch(() => undefined), late]);
+      if (!head) {
+        this.host.log(`Could not read the start of ${path} in time; offering Open`);
+        return true;
       }
-      if (!this.alive(session, epoch)) return;
+      return looksLikeText(head);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-    if (!this.raw || this.remoteAlt || !session.hasShell()) return;
-    this.typeText(`${line}\r`, `${line}\r`, false);
-    this.inputLine.reset();
-    this.host.focusTerminal?.();
+  }
+
+  /** Open: load the file into a VS Code editor tab. Big files ask first. */
+  private async menuOpen(session: FileSession, epoch: number, target: ActionTarget): Promise<void> {
+    const open = this.host.openRemoteFile;
+    if (!open) return;
+    let size = target.size;
+    if (size === undefined && session.stat) size = await session.stat(target.linkTarget ?? target.path).then((found) => found.size).catch(() => undefined);
+    if (!this.alive(session, epoch)) return;
+    if (size !== undefined && size > OPEN_ASK_BYTES && this.host.choose) {
+      const question = largeOpenQuestion(target, size);
+      const answer = await this.host.choose(question.message, question.detail, ['Open Anyway', 'Download']);
+      if (!answer || !this.alive(session, epoch)) return;
+      if (answer === 'Download') {
+        await this.menuDownload(session, epoch, target);
+        return;
+      }
+    }
+    try {
+      await open.call(this.host, target.path);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.host.log(`Could not open ${target.path}: ${message}`);
+      this.host.notify?.('error', `Could not open ${target.name}. ${message}`);
+    }
   }
 
   /** Rename: ask for the new name, confirm, then rename over SFTP. */

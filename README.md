@@ -5,7 +5,7 @@
 [![CI](https://github.com/dhlptx00/EasySSH/actions/workflows/ci.yml/badge.svg)](https://github.com/dhlptx00/EasySSH/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-An SSH client in a VS Code or Cursor terminal tab. Save your hosts, hop through jump hosts, import `~/.ssh/config`, Ctrl+click a file or folder name to download, view, edit, rename or delete it, and drag files onto the terminal to upload them.
+An SSH client in a VS Code or Cursor terminal tab. Save your hosts, hop through jump hosts, import `~/.ssh/config`, Ctrl+click a file or folder name to download, open, rename or delete it, and drag files onto the terminal to upload them.
 
 Easy SSH talks SSH directly from your editor. **Nothing is installed on the server**, and no remote editor server is downloaded, so it works on old, small, and locked-down machines where Remote-SSH can't run.
 
@@ -28,7 +28,7 @@ Easy SSH talks SSH directly from your editor. **Nothing is installed on the serv
 - Hop through one or more jump hosts
 - Import hosts from `~/.ssh/config`, including `Host *` defaults and `ProxyJump` chains
 - Open your remote login shell (bash, zsh, fish and others) and use it exactly as over `ssh`, including `vim`, `top` and `sudo`
-- **Ctrl+click a file or folder name** (Cmd+click on macOS) for its action menu: **Download** (you choose where), **View** (`cat`) and **Edit** (`vi`) for files, **Upload** into a folder, **Rename** and **Delete**
+- **Ctrl+click a file or folder name** (Cmd+click on macOS) for its action menu: **Download** (you choose where), **Open** a text file in an editor tab (saving writes it back to the server), **Upload** into a folder, **Rename** and **Delete**
 - **Download a folder** with everything in it, the same way
 - **Upload:** drag files or folders onto the terminal. They go into the current remote folder
 - Follow big transfers in a progress notification with **Cancel**
@@ -99,12 +99,15 @@ Ctrl+click a file or folder name in the remote shell (Cmd+click on macOS) to ope
 | --- | --- | --- | --- |
 | Download | ✓ | ✓ | Opens a save dialog (for a folder: a folder picker), starting in your download folder, then downloads with a progress notification and **Cancel** |
 | Upload… | | ✓ | Opens a file picker titled with the target, e.g. `Upload to /home/demo/project/logs`, and uploads into the clicked folder with a progress notification. Existing names ask first. To upload into the current folder, drop files on the terminal as before |
-| View | ✓ | | Types `cat '/full/path'` into the same terminal. Files over 1 MB ask first |
-| Edit | ✓ | | Types `vi '/full/path'` into the same terminal |
+| Open | text | | Opens the file in a VS Code editor tab. **Ctrl+S** (Cmd+S) saves it straight back to the server, keeping its permissions. Files over 5 MB ask first: **Open Anyway**, **Download** or Cancel |
 | Rename… | ✓ | ✓ | Asks for the new name (the part before the extension is selected), checks it isn't taken, asks once more, then renames over SFTP |
 | Delete… | ✓ | ✓ | Asks first. For a folder the question counts its files, e.g. `Delete folder "logs" and its 128 files?` (`5000+ files` for very big ones). A folder is deleted with everything in it |
 
-View and Edit type into the shell only when it's at its prompt. If a full-screen program runs or text is typed at the prompt, Easy SSH says so instead; if an earlier command may still be running, it asks first. For a symbolic link, Rename and Delete change the link itself, not what it points to.
+**Open** is offered for text files only, so the menu for an archive, image or program is Download, Rename, Delete. Easy SSH decides by the name first (`.txt`, `.json`, `.yaml`, `.log`, `.conf`, `.sh`, `.py`, `Dockerfile`, `.bashrc`, `authorized_keys` and many more are text; `.zip`, `.tar.gz`, `.png`, `.pdf`, `.so`, `.exe` and the like are not). For any other name it reads the first 8 KB over SFTP: no NUL bytes and valid UTF-8 means text. If that read fails or takes too long, Open is offered.
+
+The editor tab's address is `easyssh://<connection>/<full path>`, and it reads and saves through the terminal's own connection. If the file changed on the server since you opened it, saving asks before overwriting. While the terminal is disconnected or closed, saving fails with a message that says so, and your changes stay in the editor. A tab still open after VS Code reloads works again once you open a terminal for the same connection. A save writes a temporary file next to the original with the same permissions, then puts it in place; a symbolic link stays a link, and a file owned by another user (or in a folder you can't write to) is rewritten in place so its owner doesn't change.
+
+For a symbolic link, Rename and Delete change the link itself, not what it points to.
 
 Cancelling a dialog does nothing. Every rename and delete runs over SFTP as the user you signed in as.
 
@@ -158,7 +161,7 @@ Easy SSH sends a keepalive every 15 seconds. If the server stops answering, or t
 | Action | Result |
 | --- | --- |
 | Type, arrows, Tab, Ctrl+R, Ctrl+L | The remote shell handles the keys. Tab finishes a path such as `cd /tm` |
-| Ctrl+click a file name (Cmd+click on macOS) | Action menu: Download, View, Edit, Rename, Delete |
+| Ctrl+click a file name (Cmd+click on macOS) | Action menu: Download, Open (text files), Rename, Delete |
 | Ctrl+click a folder name (Cmd+click on macOS) | Action menu: Download (with everything in it), Upload, Rename, Delete |
 | Enter in the action menu | Download |
 | Drag with the mouse | Select text |
@@ -230,9 +233,9 @@ With SSH agent sign-in, Easy SSH tries the agent first, then `~/.ssh/id_ed25519`
 | Works on old, small or locked-down servers | Yes | Often not | Yes | Yes |
 | Works in Cursor and VSCodium | Yes | Microsoft builds only | Yes | Yes |
 | Saved hosts and jump hosts | Yes | Through `~/.ssh/config` | Yes | Through `~/.ssh/config` |
-| Ctrl+click a name to download, view, edit, rename or delete | Files and folders | No | No | No |
+| Ctrl+click a name to download, open, rename or delete | Files and folders | No | No | No |
 | Upload by dropping onto the terminal | Yes | Into the explorer | Into the explorer | No |
-| Edit remote files in the editor | No | Yes | Yes | No |
+| Edit remote files in the editor | One file at a time, from the shell | Yes | Yes | No |
 | Remote language servers, debugging | No | Yes | No | No |
 
 Use Remote-SSH when you want to develop *on* the server. Use Easy SSH when you want a quick, reliable shell with easy file transfer, especially on servers you can't or don't want to install anything on.

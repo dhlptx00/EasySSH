@@ -15,6 +15,8 @@ import { shortRemote, type ActionMenu, type FileAction } from './terminal/action
 import type { AppHost, ProgressHandle, RenameRequest } from './terminal/host';
 import { EasySshPty } from './terminal/pty';
 import type { LineLink } from './terminal/render';
+import { RemoteFiles, overwriteText, type EditorSession, type EditorTarget, type OverwriteQuestion } from './remoteFiles';
+import { EASYSSH_SCHEME } from './remoteFsProvider';
 import type { UploadQuestion } from './terminal/cwdTracking';
 import { expandHome, formatFingerprint } from './text';
 import type { ConflictChoice, ConnectionRecord } from './types';
@@ -32,6 +34,8 @@ interface LiveTerminal {
   pty: EasySshPty;
   terminal: vscode.Terminal;
   app: EasySshApp;
+  /** The URI authority of files opened from this terminal (easyssh://<authority>/path). */
+  authority?: string;
   status?: string;
   transferring?: boolean;
 }
@@ -41,6 +45,12 @@ function settings(): vscode.WorkspaceConfiguration {
 }
 
 /** A number setting, clamped to [min, max], or the fallback when unset or invalid. */
+/** A URI authority from a connection name: letters, digits, dot, dash and underscore. */
+export function editorAuthority(label: string): string {
+  const cleaned = label.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return cleaned || 'server';
+}
+
 export function numberSetting(value: unknown, fallback: number, min: number, max: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(value)));
@@ -524,6 +534,67 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
     });
   }
 
+  /** Remote files in editor tabs, read and saved through each terminal's session. */
+  readonly remoteFiles = new RemoteFiles(
+    (authority) => this.editorTarget(authority),
+    (question) => this.askOverwrite(question),
+  );
+
+  private editorTarget(authority: string): EditorTarget | undefined {
+    const live = this.lives.find((item) => item.authority === authority) ?? this.adoptAuthority(authority);
+    if (!live) return undefined;
+    return {
+      label: live.app.connectionLabel(),
+      session: () => {
+        const session = live.app.editorSession();
+        if (!session || !session.readWhole || !session.writeWhole || !session.makeDir || !session.stat || !session.remove || !session.rename) return null;
+        return session as unknown as EditorSession;
+      },
+    };
+  }
+
+  /**
+   * A tab restored after a reload (or kept open after its terminal closed) names a terminal that no
+   * longer exists. Hand it to a connected terminal for the same connection that has no files open yet.
+   */
+  private adoptAuthority(authority: string): LiveTerminal | undefined {
+    const live = this.lives.find((item) => {
+      if (item.authority || !item.app.editorSession()) return false;
+      const base = editorAuthority(item.app.connectionLabel());
+      return authority === base || (authority.startsWith(`${base}-`) && /^\d+$/.test(authority.slice(base.length + 1)));
+    });
+    if (live) live.authority = authority;
+    return live;
+  }
+
+  /** A short, stable name for a terminal's files: the connection name, numbered when two terminals share it. */
+  private authorityFor(live: LiveTerminal): string {
+    if (live.authority) return live.authority;
+    const base = editorAuthority(live.app.connectionLabel());
+    const used = new Set(this.lives.filter((item) => item !== live).map((item) => item.authority));
+    let candidate = base;
+    for (let index = 2; used.has(candidate); index += 1) candidate = `${base}-${index}`;
+    live.authority = candidate;
+    return candidate;
+  }
+
+  private async openRemoteFile(live: LiveTerminal | undefined, remotePath: string): Promise<void> {
+    if (!live) throw new Error('The terminal is closed.');
+    const uri = vscode.Uri.from({ scheme: EASYSSH_SCHEME, authority: this.authorityFor(live), path: remotePath });
+    await vscode.window.showTextDocument(uri, { preview: false });
+  }
+
+  private async askOverwrite(question: OverwriteQuestion): Promise<boolean> {
+    const text = overwriteText(question);
+    const action = question.now ? 'Overwrite' : 'Save';
+    const picked = await vscode.window.showWarningMessage(text.message, { modal: true, detail: text.detail }, action);
+    return picked === action;
+  }
+
+  private async choose(message: string, detail: string, answers: string[]): Promise<string | undefined> {
+    return vscode.window.showWarningMessage(message, { modal: true, detail }, ...answers);
+  }
+
   private async confirm(message: string, detail: string, action: string): Promise<boolean> {
     const picked = await vscode.window.showWarningMessage(message, { modal: true, detail }, action);
     return picked === action;
@@ -602,7 +673,8 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
       pickUploadFiles: (remoteDir) => this.pickUploadFiles(remoteDir),
       askRename: (request) => this.askRename(request),
       confirm: (message, detail, action) => this.confirm(message, detail, action),
-      focusTerminal: () => liveOf()?.terminal.show(false),
+      openRemoteFile: (remotePath) => this.openRemoteFile(liveOf(), remotePath),
+      choose: (message, detail, answers) => this.choose(message, detail, answers),
       transferSettings: () => ({
         concurrency: numberSetting(settings().get('transferConcurrency'), 32, 1, 64),
         maxFiles: numberSetting(settings().get('maxTransferFiles'), 5000, 1, 100000),

@@ -1,7 +1,7 @@
 {
   "name": "easy-ssh",
   "displayName": "Easy SSH – SSH Client & SFTP Drag-and-Drop",
-  "description": "SSH client in a VS Code / Cursor terminal tab: saved hosts, jump hosts, ~/.ssh/config import, Ctrl+click a file to download, edit or delete it, drag and drop to upload. Nothing to install on servers.",
+  "description": "SSH client in a VS Code / Cursor terminal tab: saved hosts, jump hosts, ~/.ssh/config import, Ctrl+click a file to download, open or delete it, drag and drop to upload. Nothing to install on servers.",
   "version": "0.2.0",
   "publisher": "easy-ssh",
   "license": "MIT",
@@ -56,6 +56,9 @@
   ],
   "extensionKind": [
     "ui"
+  ],
+  "activationEvents": [
+    "onFileSystem:easyssh"
   ],
   "main": "./dist/extension.js",
   "capabilities": {
@@ -125,7 +128,7 @@
           "type": "boolean",
           "default": false,
           "order": 1,
-          "markdownDescription": "Open the action menu (Download, Upload, View, Edit, Rename, Delete) of file and folder names in the remote shell with a plain click instead of Ctrl+click (Cmd+click on macOS). This turns on terminal mouse reporting, so selecting text then needs Shift+drag (on macOS, Option+drag with `terminal.integrated.macOptionClickForcesSelection` turned on). Applies to new connections."
+          "markdownDescription": "Open the action menu (Download, Upload, Open, Rename, Delete) of file and folder names in the remote shell with a plain click instead of Ctrl+click (Cmd+click on macOS). This turns on terminal mouse reporting, so selecting text then needs Shift+drag (on macOS, Option+drag with `terminal.integrated.macOptionClickForcesSelection` turned on). Applies to new connections."
         },
         "easySsh.hostKeyPolicy": {
           "type": "string",

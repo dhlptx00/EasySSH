@@ -64,7 +64,8 @@ describe('listing and docs (L1–L9)', () => {
     assert.ok(pkg.description.length <= 200);
     assert.equal(pkg.galleryBanner?.theme, 'dark');
     assert.match(pkg.qna ?? '', /^https:\/\/github\.com\/.+\/discussions$/);
-    assert.equal(pkg.activationEvents, undefined, 'contributed views and commands activate the extension');
+    // Views and commands activate the extension on their own; a restored easyssh: tab needs the file system.
+    assert.deepEqual(pkg.activationEvents, ['onFileSystem:easyssh']);
   });
 
   it('documents the current version in the CHANGELOG with a date', () => {

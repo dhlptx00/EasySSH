@@ -1,9 +1,8 @@
 import { remoteBasename, remoteDirname } from '../remotePath';
-import { quoteFor, type ShellKind } from '../ssh/shellFeed';
 import { formatSize, formatTime } from '../text';
 
 /** What Ctrl/Cmd+click on a name in the remote shell can do. */
-export type FileAction = 'download' | 'upload' | 'view' | 'edit' | 'rename' | 'delete';
+export type FileAction = 'download' | 'upload' | 'open' | 'rename' | 'delete';
 
 /** The file or folder a click landed on. Symlinks are already resolved to what they point at. */
 export interface ActionTarget {
@@ -35,8 +34,10 @@ export interface ActionMenu {
   items: ActionMenuItem[];
 }
 
-/** Files bigger than this ask before View prints them into the terminal. */
-export const VIEW_CONFIRM_BYTES = 1024 * 1024;
+/** Text files bigger than this ask before Open loads them into an editor tab. */
+export const OPEN_ASK_BYTES = 5 * 1024 * 1024;
+/** How long the menu waits for the first bytes of a file it cannot classify by name. */
+export const SNIFF_MS = 800;
 /** Folder delete stops counting at this many files and says "5000+". */
 export const DELETE_COUNT_CAP = 5000;
 /** Folder delete stops counting after this long. */
@@ -66,7 +67,7 @@ export function targetSummary(target: ActionTarget, items?: number | 'counting',
 
 /**
  * The action menu for a clicked name. Download comes first, so Enter downloads.
- * Upload is only offered for folders, View and Edit only for files. Delete is last, on its own.
+ * Upload is only offered for folders, Open only for text files. Delete is last, on its own.
  */
 export function actionMenu(target: ActionTarget, options: { downloadLabel: string; items?: number | 'counting'; now?: number }): ActionMenu {
   const file = target.kind === 'file';
@@ -90,8 +91,7 @@ export function actionMenu(target: ActionTarget, options: { downloadLabel: strin
   }
   if (file) {
     items.push(
-      { action: 'view', icon: 'eye', label: 'View', description: 'Print it in this terminal (cat)' },
-      { action: 'edit', icon: 'edit', label: 'Edit', description: 'Open it in vi in this terminal' },
+      { action: 'open', icon: 'go-to-file', label: 'Open', description: 'Edit it in a VS Code tab. Saving writes it back to the server' },
     );
   }
   items.push(
@@ -164,9 +164,14 @@ export function deleteQuestion(target: ActionTarget, count?: TreeCount): { messa
   };
 }
 
-/** The line typed into the remote shell for View and Edit. The path is absolute and quoted. */
-export function terminalCommand(action: 'view' | 'edit', path: string, shell: ShellKind | undefined): string {
-  return `${action === 'view' ? 'cat' : 'vi'} ${quoteFor(shell, path)}`;
+/** The question before Open loads a big text file into an editor tab. */
+export function largeOpenQuestion(target: ActionTarget, size: number): { message: string; detail: string } {
+  return {
+    message: `"${target.name}" is ${formatSize(size)}. Open it in an editor?`,
+    detail: `${target.path}
+
+The whole file is loaded over SSH before the tab opens, and saving sends all of it back. Download saves a copy on this computer instead.`,
+  };
 }
 
 /** The rename confirmation. */
