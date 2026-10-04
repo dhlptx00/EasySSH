@@ -55,6 +55,8 @@ Click the **Easy SSH** icon in the activity bar, or run **Easy SSH: New Terminal
 
 *The connection list. Up and Down select a connection, Enter connects.*
 
+The list shows each connection's user@host:port, sign-in method (key, password, agent, and the jump host it goes through) and when you last used it. The **Last:** line under the Easy SSH mark names the connection you used most recently; the list starts on it, so Enter reconnects. The bottom line lists the main keys, and the prompt shows a different tip each time.
+
 ## Commands
 
 On the connection panel, type `/` to open the command list. Connections and system commands are listed in separate groups. Up and Down move through the list, further typing filters it, and Enter runs the highlighted row.
@@ -67,6 +69,7 @@ On the connection panel, type `/` to open the command list. Connections and syst
 | /delete | Choose a connection, then delete it |
 | /import | Import `~/.ssh/config` |
 | /folder | Choose the local download folder |
+| /theme | Switch colors: Auto, Easy SSH Dark, Easy SSH Light |
 | /quit | Close the terminal |
 | Enter | Connect to the selected connection |
 
@@ -81,9 +84,17 @@ On the connection panel, type `/` to open the command list. Connections and syst
 | ![New connection form](media/readme/03-new-connection-form.png) | ![Editing a connection and choosing a jump host](media/readme/04-edit-connection-jump-host.png) | ![Delete confirmation for a saved connection](media/readme/05-delete-connection-confirm.png) |
 | Fill in the fields for a new connection | Change a connection, here adding a jump host | Confirm before a connection is removed |
 
-Passwords and key passphrases are hidden while you type. Press Enter on a saved secret to keep it. Sign-in method and jump host are choices: move with Up and Down, then press Enter. For a custom jump host, type `user@host:port`, and separate extra hops with commas.
+`/new` asks one field per step (Step 2 of 6, …), with a short help line under each field and a red message when a value can't work: an empty host, a port that isn't a number from 1 to 65535, a key file that doesn't exist. Esc goes back one step. The last page shows every value and the matching `ssh` command; from there, **Test connection** connects and signs in without saving, **Save** adds the connection, and **Back** returns to the last step. Enter on a value changes just that field.
+
+`/edit` opens the same page for a saved connection: pick the field to change, then Save. `/delete` asks in red, with the connection's name and host, before anything is removed.
+
+Passwords and key passphrases are hidden while you type and never shown afterwards. Press Enter on a saved secret to keep it. Sign-in method and jump host are choices: move with Up and Down, then press Enter. For a custom jump host, type `user@host:port`, and separate extra hops with commas.
 
 For password sign-in you choose whether Easy SSH saves the password or asks for it at every connect. If you change a connection's sign-in method or key, jump hosts that signed in the same way change with it.
+
+### Themes
+
+The Easy SSH screens come in two palettes based on the Easy SSH icon: **Easy SSH Dark** (violet and pink on deep indigo) and **Easy SSH Light** (on lavender white). `/theme` cycles Auto, Dark and Light; Auto follows VS Code's theme (light and high-contrast light themes get Easy SSH Light). The choice is saved in the `easySsh.theme` setting. Connected shells use the same palette too, in Easy SSH terminals only; turn that off with `easySsh.themeSession`. `easySsh.colorDepth` switches to 256 or 16 colors if colors look wrong.
 
 ## Remote shell
 
@@ -202,7 +213,7 @@ If `editor.multiCursorModifier` is set to `ctrlCmd`, names open with Alt+click i
 
 ## Downloads
 
-Downloads go to your **Downloads** folder: the one your system actually uses, including a localized or redirected folder on Windows and Linux. If there's none, they go to the Desktop. Type `/folder` on the connection panel, or run **Easy SSH: Set Download Folder**, to choose another folder. The folder in use is shown at the bottom of the connection panel and in **Output → Easy SSH**.
+Downloads go to your **Downloads** folder: the one your system actually uses, including a localized or redirected folder on Windows and Linux. If there's none, they go to the Desktop. Type `/folder` on the connection panel, or run **Easy SSH: Set Download Folder**, to choose another folder. The folder in use is named in one of the connection panel's tips and in **Output → Easy SSH**.
 
 ## Jump hosts and `~/.ssh/config`
 
@@ -250,6 +261,9 @@ With SSH agent sign-in, Easy SSH tries the agent first, then `~/.ssh/id_ed25519`
 | `easySsh.terminalLocation` | `panel` | Open Easy SSH in the panel or as an editor tab |
 | `easySsh.windowsAgent` | `auto` | Windows agent: `auto`, `openssh` or `pageant` |
 | `easySsh.readyTimeout` | `20000` | Handshake timeout in ms; time spent on prompts doesn't count |
+| `easySsh.theme` | `auto` | Easy SSH colors: `auto` (follow VS Code), `dark` or `light`; `/theme` changes it |
+| `easySsh.colorDepth` | `truecolor` | Colors the Easy SSH screens use: `truecolor`, `256` or `16` |
+| `easySsh.themeSession` | `true` | Also color connected shells in Easy SSH terminals with the Easy SSH theme |
 
 ## How it compares
 
