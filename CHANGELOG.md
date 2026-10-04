@@ -6,6 +6,8 @@ If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-04
+
 ### Changed
 
 - **Ctrl+click on a file or folder name now opens an action menu** (Cmd+click on macOS, or a plain click with `easySsh.plainClick`) instead of downloading right away. The menu's title shows the name and its folder (`report.log — /var/log/app`), the placeholder its size or item count, and **Download** is first, so Enter downloads:
@@ -15,6 +17,7 @@ If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace
   - **Rename…** suggests the current name with the part before the extension selected, refuses empty names, `/` and names that already exist, and asks once more before renaming over SFTP.
   - **Delete…** always asks. For a folder it counts the files first (`Delete folder "logs" and its 128 files?`, or `5000+ files`), then deletes it with everything in it over SFTP, with progress and Cancel for big folders. For a symlink only the link is deleted.
 - Link tooltips and the hint above the shell list the actions instead of "Download".
+- README: new infographic, demo GIF and screenshots of the action menu, the editor tab, the large-file question and the save conflict.
 
 ### Fixed
 
@@ -129,7 +132,8 @@ If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace
 - Open a remote directory, click a file to download it, and drop local files to upload them.
 - Connect with a password, a private key, or an SSH agent, including one or more jump hosts.
 
-[Unreleased]: https://github.com/dhlptx00/EasySSH/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/dhlptx00/EasySSH/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.3.0
 [0.2.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.2.0
 [0.1.4]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.1.4
 [0.1.3]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.1.3

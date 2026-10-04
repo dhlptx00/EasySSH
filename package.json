@@ -1,8 +1,8 @@
 {
   "name": "easy-ssh",
   "displayName": "Easy SSH – SSH Client & SFTP Drag-and-Drop",
-  "description": "SSH client in a VS Code / Cursor terminal tab: saved hosts, jump hosts, ~/.ssh/config import, Ctrl+click a file to download, open or delete it, drag and drop to upload. Nothing to install on servers.",
-  "version": "0.2.0",
+  "description": "SSH client in a VS Code / Cursor terminal: saved hosts, jump hosts, ~/.ssh/config import, Ctrl+click a file to download, edit, rename or delete it, drop files to upload. Nothing to install on servers.",
+  "version": "0.3.0",
   "publisher": "easy-ssh",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -44,6 +44,8 @@
     "drag and drop",
     "upload",
     "download",
+    "remote edit",
+    "file manager",
     "remote",
     "remote server",
     "sysadmin",
@@ -243,7 +245,7 @@
     "lint": "eslint .",
     "test": "node scripts/test.js",
     "test:integration": "node scripts/test.js test/integration",
-    "package": "npx @vscode/vsce package --no-dependencies"
+    "package": "npx @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/dhlptx00/EasySSH/blob/main/ --baseImagesUrl https://raw.githubusercontent.com/dhlptx00/EasySSH/main/"
   },
   "vsce": {
     "dependencies": false
