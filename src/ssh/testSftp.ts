@@ -1,6 +1,7 @@
 /**
  * An in-memory SFTP server with just enough of ssh2's SFTPWrapper for the
- * transfer code: handles, positional reads and writes, stat, readdir, rename.
+ * transfer code: handles, positional reads and writes, stat, readdir, rename,
+ * unlink and rmdir.
  * Used by unit tests only.
  */
 type Kind = 'file' | 'dir' | 'link' | 'other';
@@ -227,7 +228,20 @@ export class FakeSftp {
   }
 
   unlink(target: string, cb: (err?: Error) => void): void {
-    if (!this.nodes.delete(target)) return cb(sftpError(2, 'No such file'));
+    const node = this.nodes.get(target);
+    if (!node) return cb(sftpError(2, 'No such file'));
+    if (node.kind === 'dir') return cb(sftpError(4, 'Failure'));
+    this.nodes.delete(target);
+    cb();
+  }
+
+  /** Like OpenSSH: only an empty folder can be removed. */
+  rmdir(target: string, cb: (err?: Error) => void): void {
+    const node = this.nodes.get(target);
+    if (!node || node.kind !== 'dir') return cb(sftpError(2, 'No such file'));
+    const prefix = target === '/' ? '/' : `${target}/`;
+    if ([...this.nodes.keys()].some((key) => key.startsWith(prefix))) return cb(sftpError(4, 'Failure'));
+    this.nodes.delete(target);
     cb();
   }
 }

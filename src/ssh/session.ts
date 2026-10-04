@@ -5,7 +5,9 @@ import { StringDecoder } from 'node:string_decoder';
 import { Client, type ClientChannel, type ConnectConfig, type SFTPWrapper, type TerminalModes } from 'ssh2';
 import type { Readable as NodeReadable } from 'stream';
 import { NameSet, reserveLocalTarget, numberedName } from '../localTarget';
-import { remoteBasename, remoteDirname, remoteJoin } from '../remotePath';
+import { normalizeRemote, remoteBasename, remoteDirname, remoteJoin } from '../remotePath';
+import type { TreeCount } from '../terminal/actions';
+import type { RemoteStat, RemoveOptions } from '../terminal/host';
 import { expandHome, safeFileName } from '../text';
 import type {
   AuthMethod,
@@ -613,6 +615,130 @@ export class SshSession {
     }
   }
 
+  /**
+   * Download one file to exactly localPath, e.g. a path picked in a save dialog
+   * (which already asked about replacing). Bytes go to a hidden .part file first.
+   */
+  async downloadTo(remotePath: string, localPath: string, options: TransferOptions): Promise<DownloadResult> {
+    const folder = path.dirname(localPath);
+    await fs.promises.mkdir(folder, { recursive: true }).catch((err: unknown) => {
+      throw new TransferError('Cannot create folder', folder, 'local', err);
+    });
+    const progress: TransferProgress = { phase: 'copy', bytes: 0, totalBytes: 0, files: 0, totalFiles: 1, current: path.basename(localPath) };
+    const result = await this.fetchFile(remotePath, localPath, progress, options);
+    return { localPath, bytes: result.bytes, grew: result.grew };
+  }
+
+  /** What a path is, following symlinks. */
+  async stat(remotePath: string): Promise<RemoteStat> {
+    const sftp = this.files();
+    const stats = await callbackOf<import('ssh2').Stats>((done) => sftp.stat(remotePath, (err, found) => done(err, found)));
+    return {
+      kind: stats.isDirectory() ? 'dir' : stats.isFile() ? 'file' : 'other',
+      size: asCount(stats.size),
+      mtime: asCount(stats.mtime) * 1000,
+    };
+  }
+
+  /** Rename on the server. Refuses to replace an existing name. */
+  async rename(from: string, to: string): Promise<void> {
+    const sftp = this.files();
+    if (await this.exists(to)) {
+      throw new TransferError('Cannot rename', from, 'remote', new Error(`${remoteBasename(to)} already exists`));
+    }
+    await callbackOf<void>((done) => sftp.rename(from, to, (err) => done(err, undefined))).catch((err: unknown) => {
+      throw new TransferError('Cannot rename', from, 'remote', err);
+    });
+  }
+
+  /**
+   * Delete a file or symlink, or a folder with everything in it (symlinks inside
+   * are removed, never followed). Stops between items when cancelled.
+   */
+  async remove(remotePath: string, options: RemoveOptions): Promise<{ files: number; folders: number }> {
+    const sftp = this.files();
+    const target = normalizeRemote(remotePath);
+    if (!target.startsWith('/') || target === '/') {
+      throw new TransferError('Cannot delete', remotePath, 'remote', new Error('refusing to delete this path'));
+    }
+    const top = await callbackOf<import('ssh2').Stats>((done) => sftp.lstat(target, (err, found) => done(err, found))).catch((err: unknown) => {
+      throw new TransferError('Cannot delete', target, 'remote', err);
+    });
+    let files = 0;
+    let folders = 0;
+    const tick = () => options.onProgress?.(files + folders);
+    const unlink = async (file: string) => {
+      if (options.signal.aborted) throw new TransferCancelled();
+      await callbackOf<void>((done) => sftp.unlink(file, (err) => done(err, undefined))).catch((err: unknown) => {
+        throw new TransferError('Cannot delete', file, 'remote', err);
+      });
+      files += 1;
+      tick();
+    };
+    const walk = async (dir: string): Promise<void> => {
+      if (options.signal.aborted) throw new TransferCancelled();
+      const entries = await callbackOf<import('ssh2').FileEntryWithStats[]>((done) => sftp.readdir(dir, (err, list) => done(err, list ?? []))).catch((err: unknown) => {
+        throw new TransferError('Cannot read folder', dir, 'remote', err);
+      });
+      const plain: string[] = [];
+      const subfolders: string[] = [];
+      for (const entry of entries) {
+        if (entry.filename === '.' || entry.filename === '..') continue;
+        const child = remoteJoin(dir, entry.filename);
+        if (entry.attrs.isDirectory()) subfolders.push(child);
+        else plain.push(child);
+      }
+      // A few requests in flight: deleting is bound by round trips.
+      let next = 0;
+      const worker = async () => {
+        while (next < plain.length) {
+          const file = plain[next];
+          next += 1;
+          await unlink(file);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(8, plain.length) }, worker));
+      for (const sub of subfolders) await walk(sub);
+      if (options.signal.aborted) throw new TransferCancelled();
+      await callbackOf<void>((done) => sftp.rmdir(dir, (err) => done(err, undefined))).catch((err: unknown) => {
+        throw new TransferError('Cannot delete folder', dir, 'remote', err);
+      });
+      folders += 1;
+      tick();
+    };
+    if (top.isDirectory()) await walk(target);
+    else await unlink(target);
+    return { files, folders };
+  }
+
+  /** Count the files and subfolders under a folder, up to cap files or timeoutMs. */
+  async countTree(remotePath: string, options: { cap: number; timeoutMs: number }): Promise<TreeCount> {
+    const sftp = this.files();
+    const deadline = Date.now() + options.timeoutMs;
+    let files = 0;
+    let folders = 0;
+    const queue = [remotePath];
+    while (queue.length > 0) {
+      if (files >= options.cap || Date.now() > deadline) return { files: Math.min(files, options.cap), folders, capped: true };
+      const dir = queue.shift() as string;
+      let entries: import('ssh2').FileEntryWithStats[];
+      try {
+        entries = await callbackOf<import('ssh2').FileEntryWithStats[]>((done) => sftp.readdir(dir, (err, list) => done(err, list ?? [])));
+      } catch (err) {
+        if (dir === remotePath) throw err;
+        continue;
+      }
+      for (const entry of entries) {
+        if (entry.filename === '.' || entry.filename === '..') continue;
+        if (entry.attrs.isDirectory()) {
+          folders += 1;
+          queue.push(remoteJoin(dir, entry.filename));
+        } else files += 1;
+      }
+    }
+    return { files, folders, capped: false };
+  }
+
   private async fetchFile(
     remotePath: string,
     localPath: string,
@@ -920,7 +1046,7 @@ export class SshSession {
     });
   }
 
-  private async exists(remote: string): Promise<boolean> {
+  async exists(remote: string): Promise<boolean> {
     const sftp = this.files();
     return callbackOf<import('ssh2').Stats>((done) => sftp.lstat(remote, (err, stats) => done(err, stats)))
       .then(() => true)

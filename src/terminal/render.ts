@@ -263,14 +263,17 @@ function renderPanel(screen: Exclude<Screen, { kind: 'connections' }>, view: Ren
 }
 
 /** One quiet line shown above the login shell. */
-/** The line shown when a shell opens. `click` is how names open, e.g. "Ctrl+click". */
-export function sessionHint(click = 'Click'): { plain: string; styled: string } {
+/**
+ * The line shown when a shell opens. `click` is how names open, e.g. "Ctrl+click".
+ * `menu` when a click opens the action menu instead of downloading.
+ */
+export function sessionHint(click = 'Click', menu = false): { plain: string; styled: string } {
   const gold = '\x1b[38;2;250;178;131m';
   const dim = '\x1b[38;2;106;106;106m';
   const reset = '\x1b[0m';
   const parts = [
     { text: click, color: gold },
-    { text: 'a file or folder name to download it', color: dim },
+    { text: menu ? 'a file or folder name to download, view, edit, rename or delete it' : 'a file or folder name to download it', color: dim },
     { text: '·', color: dim },
     { text: 'drag files to upload', color: dim },
     { text: '·', color: dim },
@@ -283,7 +286,7 @@ export function sessionHint(click = 'Click'): { plain: string; styled: string } 
 }
 
 /** The file or directory under a 0-based screen column. */
-export function linkAt(cells: readonly string[], column: number, entries: BrowseEntry[], downloadLabel?: string): LineLink | undefined {
+export function linkAt(cells: readonly string[], column: number, entries: BrowseEntry[], downloadLabel?: string, menu = false): LineLink | undefined {
   if (column < 0) return undefined;
   let text = '';
   const origin: number[] = [];
@@ -293,7 +296,7 @@ export function linkAt(cells: readonly string[], column: number, entries: Browse
     origin.push(index);
     text += cell;
   }
-  for (const span of nameSpans(text, entries, downloadLabel)) {
+  for (const span of nameSpans(text, entries, downloadLabel, menu)) {
     const start = origin[span.start];
     if (start === undefined) continue;
     const endChar = span.start + span.length;
@@ -303,7 +306,14 @@ export function linkAt(cells: readonly string[], column: number, entries: Browse
   return undefined;
 }
 
-export function nameSpans(plain: string, entries: BrowseEntry[], downloadLabel = 'the Desktop'): LineLink[] {
+/** The tooltip of a linked name: what a click does. */
+export function linkTooltip(entry: BrowseEntry, downloadLabel: string, menu: boolean): string {
+  const folder = entry.kind === 'dir';
+  if (menu) return folder ? `Folder ${entry.name}: download, upload into, rename, delete` : `${entry.name}: download, view, edit, rename, delete`;
+  return folder ? `Download folder ${entry.name} to ${downloadLabel}` : `Download ${entry.name} to ${downloadLabel}`;
+}
+
+export function nameSpans(plain: string, entries: BrowseEntry[], downloadLabel = 'the Desktop', menu = false): LineLink[] {
   const ranked = entries
     .filter((entry) => entry.name && entry.name !== '..' && entry.name !== '.')
     .sort((a, b) => b.name.length - a.name.length || a.name.localeCompare(b.name));
@@ -327,7 +337,7 @@ export function nameSpans(plain: string, entries: BrowseEntry[], downloadLabel =
           length: entry.name.length,
           remotePath: entry.path,
           kind,
-          tooltip: kind === 'dir' ? `Download folder ${entry.name} to ${downloadLabel}` : `Download ${entry.name} to ${downloadLabel}`,
+          tooltip: linkTooltip(entry, downloadLabel, menu),
         });
       }
       from = at + Math.max(1, entry.name.length);

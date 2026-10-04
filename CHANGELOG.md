@@ -6,6 +6,16 @@ If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace
 
 ## [Unreleased]
 
+### Changed
+
+- **Ctrl+click on a file or folder name now opens an action menu** (Cmd+click on macOS, or a plain click with `easySsh.plainClick`) instead of downloading right away. The menu's title shows the name and its folder (`report.log — /var/log/app`), the placeholder its size or item count, and **Download** is first, so Enter downloads:
+  - **Download** asks where to save: a save dialog for a file, a folder picker for a folder, both starting in your download folder. It shows the progress notification with Cancel. Cancelling the dialog does nothing.
+  - **Upload…** (folders only) picks local files (and folders on macOS) and uploads them into the clicked folder with the progress notification. The dialog names the target folder, and existing names ask Replace, Keep Both or Skip as before. Dropping files on the terminal still uploads into the current folder.
+  - **View** and **Edit** (files only) type `cat '/full/path'` or `vi '/full/path'` into the same terminal, only when the shell is at its prompt. Files over 1 MB ask before View prints them.
+  - **Rename…** suggests the current name with the part before the extension selected, refuses empty names, `/` and names that already exist, and asks once more before renaming over SFTP.
+  - **Delete…** always asks. For a folder it counts the files first (`Delete folder "logs" and its 128 files?`, or `5000+ files`), then deletes it with everything in it over SFTP, with progress and Cancel for big folders. For a symlink only the link is deleted.
+- Link tooltips and the hint above the shell list the actions instead of "Download".
+
 ## [0.2.0] - 2026-10-03
 
 ### Changed

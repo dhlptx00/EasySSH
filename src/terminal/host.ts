@@ -11,6 +11,7 @@ import type {
   UploadOptions,
   UploadResult,
 } from '../types';
+import type { ActionMenu, FileAction, TreeCount } from './actions';
 import type { UploadQuestion } from './cwdTracking';
 
 export interface FileSession {
@@ -26,11 +27,49 @@ export interface FileSession {
     options: TransferOptions & { maxFiles: number },
   ): Promise<FolderDownloadResult>;
   upload(localPaths: string[], remoteDir: string, options: UploadOptions): Promise<UploadResult>;
+  // The file actions below are optional: sessions without them get no action menu.
+  /** Download one file to exactly localPath (a path the user chose), replacing what is there. */
+  downloadTo?(remotePath: string, localPath: string, options: TransferOptions): Promise<DownloadResult>;
+  /** What a path is, following symlinks. */
+  stat?(remotePath: string): Promise<RemoteStat>;
+  /** True when something (even a broken symlink) has this path. */
+  exists?(remotePath: string): Promise<boolean>;
+  /** Rename or move on the server. Fails when the target exists. */
+  rename?(from: string, to: string): Promise<void>;
+  /** Delete a file, a symlink, or a folder with everything in it. */
+  remove?(remotePath: string, options: RemoveOptions): Promise<{ files: number; folders: number }>;
+  /** Count what a folder holds, stopping at cap files or after timeoutMs. */
+  countTree?(remotePath: string, options: { cap: number; timeoutMs: number }): Promise<TreeCount>;
   openShell(columns: number, rows: number, onData: (chunk: string) => void, onClose: () => void): Promise<void>;
   writeShell(data: string): void;
   resizeShell(columns: number, rows: number): void;
   hasShell(): boolean;
   close(): void;
+}
+
+export interface RemoteStat {
+  kind: 'dir' | 'file' | 'other';
+  size: number;
+  /** Milliseconds since the epoch. Zero when unknown. */
+  mtime: number;
+}
+
+export interface RemoveOptions {
+  signal: AbortSignal;
+  /** Items deleted so far. */
+  onProgress?(done: number): void;
+}
+
+/** The rename box: the old name and a check of each typed name. */
+export interface RenameRequest {
+  name: string;
+  kind: 'file' | 'folder';
+  /** The folder it is in. */
+  parent: string;
+  /** The part of the name selected at first: the name without its extension. */
+  selection: [number, number];
+  /** An error to show for the typed name, or undefined when it can be used. */
+  validate(value: string): Promise<string | undefined>;
 }
 
 export interface ConnectResult {
@@ -111,4 +150,22 @@ export interface AppHost {
   autoReconnect?(): boolean;
   /** Tells the host a transfer runs, so the status bar item can cancel it. */
   transferActive?(active: boolean): void;
+  /**
+   * The action menu Ctrl/Cmd+click on a name opens (a quick pick). update, when given,
+   * resolves to a better placeholder, e.g. once a folder's items are counted.
+   * Without it a click downloads directly.
+   */
+  showActionMenu?(menu: ActionMenu, update?: Promise<string | undefined>): Promise<FileAction | undefined>;
+  /** A save dialog for a downloaded file, starting at folder/name. Undefined when cancelled. */
+  pickSaveFile?(folder: string, name: string): Promise<string | undefined>;
+  /** A folder picker for where a downloaded folder goes, starting at folder. */
+  pickDownloadParent?(folder: string, name: string): Promise<string | undefined>;
+  /** A file picker for an upload into remoteDir on the server. */
+  pickUploadFiles?(remoteDir: string): Promise<string[] | undefined>;
+  /** Ask for a new name. Undefined when cancelled. */
+  askRename?(request: RenameRequest): Promise<string | undefined>;
+  /** A modal question with one action button (and Cancel). True when the button was chosen. */
+  confirm?(message: string, detail: string, action: string): Promise<boolean>;
+  /** Move keyboard focus to this terminal, e.g. after vi opened in it. */
+  focusTerminal?(): void;
 }

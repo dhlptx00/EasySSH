@@ -11,7 +11,8 @@ import { openSession } from './ssh/session';
 import type { HostKeyPolicy } from './ssh/hostKeys';
 import { ConnectionStore } from './store';
 import { EasySshApp } from './terminal/app';
-import type { AppHost, ProgressHandle } from './terminal/host';
+import { shortRemote, type ActionMenu, type FileAction } from './terminal/actions';
+import type { AppHost, ProgressHandle, RenameRequest } from './terminal/host';
 import { EasySshPty } from './terminal/pty';
 import type { UploadQuestion } from './terminal/cwdTracking';
 import { expandHome, formatFingerprint } from './text';
@@ -139,6 +140,8 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
   private settling = 0;
   /** Downloads and Desktop, looked up in the background at activation (B15). */
   private folders: SystemFolders = {};
+  /** Where the last upload picker found its files, to start there next time. */
+  private lastUploadFolder: string | undefined;
 
   constructor(
     private readonly store: ConnectionStore,
@@ -443,6 +446,91 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
     };
   }
 
+  /** The Ctrl/Cmd+click action menu: a quick pick with icons, Download first so Enter downloads. */
+  private showActionMenu(menu: ActionMenu, update?: Promise<string | undefined>): Promise<FileAction | undefined> {
+    interface Item extends vscode.QuickPickItem {
+      action?: FileAction;
+    }
+    return new Promise((resolve) => {
+      const pick = vscode.window.createQuickPick<Item>();
+      pick.title = menu.title;
+      pick.placeholder = menu.placeholder;
+      pick.matchOnDescription = true;
+      pick.items = menu.items.map((item): Item => (item.separator
+        ? { label: item.label, kind: vscode.QuickPickItemKind.Separator }
+        : { label: item.icon ? `$(${item.icon}) ${item.label}` : item.label, description: item.description, action: item.action }));
+      let settled = false;
+      const finish = (action: FileAction | undefined) => {
+        if (settled) return;
+        settled = true;
+        resolve(action);
+      };
+      void update?.then((text) => {
+        if (text && !settled) pick.placeholder = text;
+      });
+      pick.onDidAccept(() => {
+        finish(pick.selectedItems[0]?.action ?? pick.activeItems[0]?.action);
+        pick.hide();
+      });
+      pick.onDidHide(() => {
+        finish(undefined);
+        pick.dispose();
+      });
+      pick.show();
+    });
+  }
+
+  private async pickSaveFile(folder: string, name: string): Promise<string | undefined> {
+    const picked = await vscode.window.showSaveDialog({
+      title: `Download ${name}`,
+      saveLabel: 'Download',
+      defaultUri: vscode.Uri.file(path.join(folder, name)),
+    });
+    return picked?.fsPath;
+  }
+
+  private async pickDownloadParent(folder: string, name: string): Promise<string | undefined> {
+    const picked = await vscode.window.showOpenDialog({
+      title: `Download folder "${name}" into…`,
+      openLabel: 'Download Here',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+      defaultUri: vscode.Uri.file(folder),
+    });
+    return picked?.[0]?.fsPath;
+  }
+
+  private async pickUploadFiles(remoteDir: string): Promise<string[] | undefined> {
+    // Windows and Linux dialogs pick files or folders, not both; macOS does both.
+    const picked = await vscode.window.showOpenDialog({
+      title: `Upload to ${remoteDir}`,
+      openLabel: `Upload to ${shortRemote(remoteDir)}`,
+      canSelectFiles: true,
+      canSelectFolders: process.platform === 'darwin',
+      canSelectMany: true,
+      defaultUri: vscode.Uri.file(this.lastUploadFolder ?? os.homedir()),
+    });
+    if (!picked || picked.length === 0) return undefined;
+    this.lastUploadFolder = path.dirname(picked[0].fsPath);
+    return picked.map((uri) => uri.fsPath);
+  }
+
+  private async askRename(request: RenameRequest): Promise<string | undefined> {
+    return vscode.window.showInputBox({
+      title: `Rename ${request.kind} — ${request.parent}`,
+      prompt: `New name for "${request.name}"`,
+      value: request.name,
+      valueSelection: request.selection,
+      validateInput: (value) => request.validate(value),
+    });
+  }
+
+  private async confirm(message: string, detail: string, action: string): Promise<boolean> {
+    const picked = await vscode.window.showWarningMessage(message, { modal: true, detail }, action);
+    return picked === action;
+  }
+
   private async chooseDownloadFolder(): Promise<string | undefined> {
     const picked = await vscode.window.showOpenDialog({
       canSelectFiles: false,
@@ -510,6 +598,13 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
         }
       },
       showProgress: (title, cancel) => this.showProgress(title, cancel),
+      showActionMenu: (menu, update) => this.showActionMenu(menu, update),
+      pickSaveFile: (folder, name) => this.pickSaveFile(folder, name),
+      pickDownloadParent: (folder, name) => this.pickDownloadParent(folder, name),
+      pickUploadFiles: (remoteDir) => this.pickUploadFiles(remoteDir),
+      askRename: (request) => this.askRename(request),
+      confirm: (message, detail, action) => this.confirm(message, detail, action),
+      focusTerminal: () => liveOf()?.terminal.show(false),
       transferSettings: () => ({
         concurrency: numberSetting(settings().get('transferConcurrency'), 32, 1, 64),
         maxFiles: numberSetting(settings().get('maxTransferFiles'), 5000, 1, 100000),
