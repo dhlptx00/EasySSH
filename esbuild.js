@@ -41,6 +41,8 @@ const options = {
   sourcemap: !production,
   logLevel: 'info',
   plugins: [pageant],
+  // The header shows the version; defining it keeps the whole package.json out of the bundle.
+  define: { 'process.env.EASY_SSH_VERSION': JSON.stringify(require('./package.json').version) },
 };
 
 if (watch) {

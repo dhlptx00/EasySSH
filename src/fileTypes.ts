@@ -16,7 +16,7 @@ export const TEXT_EXTENSIONS: ReadonlySet<string> = new Set(
 );
 
 /** Whole file names (without an extension that decides) that are text. */
-export const TEXT_NAMES: ReadonlySet<string> = new Set(
+const TEXT_NAMES: ReadonlySet<string> = new Set(
   (
     'Dockerfile Makefile Jenkinsfile Vagrantfile Gemfile Procfile README LICENSE CHANGELOG .bashrc .profile .bash_profile ' +
     '.zshrc .vimrc .gitconfig authorized_keys known_hosts config hosts crontab'

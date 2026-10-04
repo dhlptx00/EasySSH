@@ -409,12 +409,14 @@ export function applyStep(step: Step, typed: string, draft: Draft, ctx: ApplyCon
 
   if (step === 'host') {
     const host = value.trim();
-    if (!host || /\s/.test(host)) return { draft, error: 'Enter a hostname or IP address' };
+    if (!host) return { draft, error: 'Host is required: a hostname or IP address' };
+    if (/\s/.test(host)) return { draft, error: 'A host cannot contain spaces' };
     next.host = host;
     return { draft: next };
   }
 
   if (step === 'port') {
+    if (!/^\d+$/.test(value.trim())) return { draft, error: 'Port must be a number, such as 22' };
     const port = Number(value.trim());
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       return { draft, error: 'Port must be between 1 and 65535' };
@@ -536,4 +538,193 @@ export function toConnection(draft: Draft, id: string): { record: ConnectionReco
   else secret = { action: 'set', passphrase: draft.passphrase || undefined };
 
   return { record, secret };
+}
+
+/** The fields of a connection, as listed on the summary and the /edit picker. */
+export type Field = 'name' | 'host' | 'port' | 'username' | 'auth' | 'jump';
+
+export const FIELDS: Field[] = ['name', 'host', 'port', 'username', 'auth', 'jump'];
+
+export function fieldTitle(field: Field): string {
+  switch (field) {
+    case 'name':
+      return 'Name';
+    case 'host':
+      return 'Host';
+    case 'port':
+      return 'Port';
+    case 'username':
+      return 'User';
+    case 'auth':
+      return 'Sign-in';
+    case 'jump':
+      return 'Jump host';
+    default: {
+      const unreachable: never = field;
+      return unreachable;
+    }
+  }
+}
+
+/** The field a step belongs to. The sign-in field covers the password and key steps. */
+export function fieldOf(step: Step): Field {
+  switch (step) {
+    case 'name':
+    case 'host':
+    case 'port':
+    case 'username':
+      return step;
+    case 'jumpChoice':
+    case 'jump':
+      return 'jump';
+    default:
+      // startPathChoice and startPath are not part of the flow today; they sit with sign-in.
+      return 'auth';
+  }
+}
+
+/** The first step that changes a field. */
+export function fieldStart(field: Field): Step {
+  return field === 'jump' ? 'jumpChoice' : field;
+}
+
+/** The steps a draft walks through from the first one, with the choices it has now. */
+export function wizardPath(draft: Draft, from: Step = 'name', only?: Field): Step[] {
+  const path: Step[] = [];
+  let cursor: Step | 'done' = from;
+  while (cursor !== 'done' && path.length < 32) {
+    if (only && fieldOf(cursor) !== only) break;
+    path.push(cursor);
+    cursor = nextStep(cursor, draft);
+  }
+  return path;
+}
+
+/** "Step 2 of 8": where a step sits in the walk, 1-based. */
+export function stepPosition(step: Step, draft: Draft, only?: Field): { index: number; total: number } {
+  const path = wizardPath(draft, only ? fieldStart(only) : 'name', only);
+  const at = path.indexOf(step);
+  return { index: (at >= 0 ? at : 0) + 1, total: Math.max(1, path.length) };
+}
+
+/** The title of a step's input box. */
+export function stepTitle(step: Step): string {
+  switch (step) {
+    case 'name':
+      return 'Connection name';
+    case 'host':
+      return 'Host';
+    case 'port':
+      return 'Port';
+    case 'username':
+      return 'User';
+    case 'auth':
+      return 'Sign-in method';
+    case 'passwordMode':
+      return 'Password storage';
+    case 'password':
+      return 'Password';
+    case 'keyPath':
+      return 'Private key file';
+    case 'passphrase':
+      return 'Key passphrase';
+    case 'startPathChoice':
+    case 'startPath':
+      return 'Remote folder';
+    case 'jumpChoice':
+      return 'Jump host';
+    case 'jump':
+      return 'Jump hosts';
+    default: {
+      const unreachable: never = step;
+      return unreachable;
+    }
+  }
+}
+
+/** The help line under a step's box. */
+export function stepHelp(step: Step, draft: Draft): string {
+  switch (step) {
+    case 'name':
+      return 'A short name. You connect with /name, so pick something easy to type';
+    case 'host':
+      return 'Hostname or IP address of the server, e.g. prod-web.example.com';
+    case 'port':
+      return `1 to 65535. Enter keeps ${draft.port || '22'}`;
+    case 'username':
+      return 'The login user on the server, e.g. deploy';
+    default:
+      return promptFor(step, draft).hint;
+  }
+}
+
+function tilde(path: string, home: string): string {
+  if (home && (path === home || path.startsWith(`${home}/`) || path.startsWith(`${home}\\`))) return `~${path.slice(home.length)}`;
+  return path;
+}
+
+/** A field's value for the summary. Passwords and passphrases are never shown. */
+export function fieldValue(field: Field, draft: Draft, home = ''): string {
+  switch (field) {
+    case 'name':
+      return draft.name || '(unset)';
+    case 'host':
+      return draft.host || '(unset)';
+    case 'port':
+      return draft.port || '22';
+    case 'username':
+      return draft.username || '(unset)';
+    case 'auth': {
+      if (draft.auth === 'agent') return 'SSH agent';
+      if (draft.auth === 'password') {
+        if (draft.passwordMode === 'ask') return 'Password, asked at every connect';
+        if (draft.password) return 'Password (new, stored securely)';
+        if (draft.keepPassword) return 'Password (saved)';
+        return 'Password, asked when you connect';
+      }
+      if (draft.auth === 'privateKey') {
+        const phrase = draft.passphrase ? 'new passphrase' : draft.keepPassphrase ? 'passphrase saved' : 'no passphrase';
+        return `Key ${tilde(draft.keyPath, home)} · ${phrase}`;
+      }
+      return '(unset)';
+    }
+    case 'jump':
+      return draft.jumpMode === 'custom' && draft.jump.trim() ? draft.jump : 'None, direct connection';
+    default: {
+      const unreachable: never = field;
+      return unreachable;
+    }
+  }
+}
+
+function sshHost(host: string): string {
+  return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+}
+
+/** The plain ssh command that matches a draft. Secrets are never part of it. */
+export function sshCommand(draft: Draft, home = ''): string {
+  const parts = ['ssh'];
+  if (draft.port && draft.port !== '22') parts.push('-p', draft.port);
+  if (draft.auth === 'privateKey' && draft.keyPath) parts.push('-i', quoteArg(tilde(draft.keyPath, home)));
+  if (draft.auth === 'password') parts.push('-o', 'PreferredAuthentications=password,keyboard-interactive');
+  if (draft.jumpMode === 'custom' && draft.jump.trim()) {
+    try {
+      const hops = parseJumpList(draft.jump).map((hop) => {
+        const user = hop.username || draft.username;
+        const port = hop.port && hop.port !== 22 ? `:${hop.port}` : '';
+        return `${user ? `${user}@` : ''}${sshHost(hop.host)}${port}`;
+      });
+      if (hops.length) parts.push('-J', hops.join(','));
+    } catch {
+      parts.push('-J', quoteArg(draft.jump.trim()));
+    }
+  }
+  parts.push(`${draft.username ? `${draft.username}@` : ''}${sshHost(draft.host)}`);
+  return parts.join(' ');
+}
+
+function quoteArg(value: string): string {
+  // Keep ~/ outside the quotes so the shell still expands it.
+  if (value.startsWith('~/') && !/^[A-Za-z0-9_@%+=:,./~-]+$/.test(value)) return `~/${quoteArg(value.slice(2))}`;
+  return /^[A-Za-z0-9_@%+=:,./~-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
 }

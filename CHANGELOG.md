@@ -4,7 +4,25 @@ All notable changes to Easy SSH. Dates are in UTC+8.
 
 If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh&ssr=false#review-details) or [Open VSX](https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews) helps others find it.
 
-## [Unreleased]
+## [0.4.0] - 2026-10-05
+
+### Changed
+
+- New connection list: an Easy SSH `>_` brand mark, a **Last:** line with the connection you used most recently (Enter reconnects it), and an aligned table with host, sign-in method (key, password, agent, jump host) and when each connection was last used. The selected row has a full-width tint. Narrow terminals drop columns and wrap the key hints. The five-line command list is now one line of key hints, and the prompt shows a rotating tip instead of the download folder.
+- `/new` is a step-by-step wizard: Step X of Y, one boxed field with help per step, inline checks (empty host, port, missing key file), Esc to go back, and a summary with the matching `ssh` command, **Test connection**, **Save** and **Back**.
+- `/edit` opens the summary of the connection: pick a field, change it, save. `/delete` asks in red with the name and host.
+- After a session ends, the list selects the connection you just used.
+- The home screen uses the terminal's height: the key hints sit at the bottom, the parts get more room on tall terminals, and the selected connection's details (host, port, sign-in, jump host, last used, start folder) show under the list when they fit. An empty list shows Getting started.
+
+### Added
+
+- Easy SSH Dark and Easy SSH Light palettes that follow your VS Code theme: Dark with a dark theme, Light with a light one (high-contrast themes get the palette of their brightness). Changing the VS Code theme recolors open Easy SSH terminals at once; there is nothing to set. The screens sit on VS Code's own terminal background; the icon's purple and pink mark the brand, accents and a soft tint on the selected row. Every highlight (prompt, selection, slash menu, hints, tips, wizard focus, text cursor) uses the palette. Connected shells get the palette's cursor and ANSI colors, in Easy SSH terminals only, and get their own colors back when the session ends (`easySsh.themeSession`). `easySsh.colorDepth` falls back to 256 or 16 colors.
+- Test connection on the `/new` and `/edit` summary: connects and signs in without saving.
+
+### Other
+
+- README: new screenshots, infographic and demo GIF for the redesigned screens and themes.
+- Smaller extension: dead code removed, and `package.json` is no longer bundled into the extension.
 
 ## [0.3.0] - 2026-10-04
 
@@ -132,7 +150,7 @@ If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace
 - Open a remote directory, click a file to download it, and drop local files to upload them.
 - Connect with a password, a private key, or an SSH agent, including one or more jump hosts.
 
-[Unreleased]: https://github.com/dhlptx00/EasySSH/compare/v0.3.0...HEAD
+[0.4.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.0
 [0.3.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.3.0
 [0.2.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.2.0
 [0.1.4]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.1.4

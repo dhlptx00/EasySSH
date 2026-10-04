@@ -1,8 +1,8 @@
 {
   "name": "easy-ssh",
   "displayName": "Easy SSH – SSH Client & SFTP Drag-and-Drop",
-  "description": "SSH client in a VS Code / Cursor terminal: saved hosts, jump hosts, ~/.ssh/config import, Ctrl+click a file to download, edit, rename or delete it, drop files to upload. Nothing to install on servers.",
-  "version": "0.3.0",
+  "description": "SSH client in a VS Code / Cursor terminal: saved hosts, Test connection, jump hosts, ~/.ssh/config import, Ctrl+click files to download, edit, rename, delete; drop to upload. No server install.",
+  "version": "0.4.0",
   "publisher": "easy-ssh",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -232,6 +232,28 @@
           "minimum": 3000,
           "order": 12,
           "markdownDescription": "How long to wait for an SSH handshake, in milliseconds. Time spent answering a prompt (password, host key) does not count."
+        },
+        "easySsh.colorDepth": {
+          "type": "string",
+          "enum": [
+            "truecolor",
+            "256",
+            "16"
+          ],
+          "default": "truecolor",
+          "order": 13,
+          "enumDescriptions": [
+            "24-bit colors, as VS Code's terminal shows them.",
+            "The nearest of the 256 xterm colors.",
+            "The 16 ANSI colors of the terminal theme."
+          ],
+          "markdownDescription": "How many colors the Easy SSH screens use. Lower it only if colors look wrong, e.g. through a terminal multiplexer."
+        },
+        "easySsh.themeSession": {
+          "type": "boolean",
+          "default": true,
+          "order": 14,
+          "markdownDescription": "Also color connected shell sessions with the Easy SSH palette (it follows your VS Code theme, light or dark): the cursor and the 16 ANSI colors (the background and text stay the terminal's own). Only Easy SSH terminals change, through terminal color sequences; your other terminals and settings are untouched, and the terminal's own colors come back when you leave the session."
         }
       }
     }

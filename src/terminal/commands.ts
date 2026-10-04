@@ -25,7 +25,7 @@ export interface SlashTarget {
 }
 
 /** System commands shown in the slash picker, in menu order. */
-export const SLASH_COMMANDS: SlashCommand[] = [
+const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'new', aliases: ['add'], description: 'Add a connection', group: 'command' },
   { name: 'edit', aliases: ['modify'], description: 'Choose a connection to edit', group: 'command' },
   { name: 'delete', aliases: ['del', 'rm', 'remove'], description: 'Choose a connection to delete', group: 'command' },

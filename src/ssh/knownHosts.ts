@@ -1,4 +1,5 @@
 import { createHash, createHmac } from 'crypto';
+import { globMatch } from '../text';
 
 /**
  * Read-only matching against OpenSSH known_hosts files, plus helpers for host key
@@ -60,16 +61,6 @@ export function parseKnownHosts(text: string): KnownHostEntry[] {
 /** The host name as known_hosts writes it: "host" on port 22, "[host]:port" otherwise. */
 export function hostField(host: string, port: number): string {
   return port === 22 ? host : `[${host}]:${port}`;
-}
-
-function globMatch(pattern: string, value: string): boolean {
-  let source = '^';
-  for (const ch of pattern) {
-    if (ch === '*') source += '.*';
-    else if (ch === '?') source += '.';
-    else source += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  }
-  return new RegExp(source + '$', 'i').test(value);
 }
 
 function hashedMatch(pattern: string, value: string): boolean {

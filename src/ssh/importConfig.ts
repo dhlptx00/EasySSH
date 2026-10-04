@@ -1,5 +1,5 @@
 import type { AuthMethod, ConnectionRecord, JumpSpec } from '../types';
-import { expandHome } from '../text';
+import { expandHome, globMatch } from '../text';
 import { parseJumpToken } from './jump';
 import type { ParsedHost } from './parseConfig';
 
@@ -40,16 +40,6 @@ function portOr(value: string | undefined, fallback: number): number {
 
 function isWildcard(pattern: string): boolean {
   return pattern.startsWith('!') || /[*?]/.test(pattern);
-}
-
-function globMatch(pattern: string, value: string): boolean {
-  let source = '^';
-  for (const ch of pattern) {
-    if (ch === '*') source += '.*';
-    else if (ch === '?') source += '.';
-    else source += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  }
-  return new RegExp(`${source}$`, 'i').test(value);
 }
 
 /** OpenSSH Host matching: any pattern matches, and a matching !pattern excludes. */

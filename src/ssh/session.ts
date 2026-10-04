@@ -183,7 +183,7 @@ function fullStat(stats: import('ssh2').Stats): FullStat {
 }
 
 /** A file too big to open in an editor tab. */
-export class FileTooLarge extends Error {
+class FileTooLarge extends Error {
   override readonly name = 'FileTooLarge';
   constructor(readonly path: string, readonly size: number, readonly limit: number) {
     super(`${remoteBasename(path)} is too large to open in an editor (over ${Math.round(limit / (1024 * 1024))} MB)`);
@@ -210,7 +210,7 @@ function endpointOf(item: ConnectionRecord | JumpSpec): Endpoint {
  * A timer that can stop while the user answers a prompt. ssh2's readyTimeout
  * also runs during authentication, so a slow typist would be cut off.
  */
-export class Deadline {
+class Deadline {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private left: number;
   private started = 0;
@@ -324,7 +324,7 @@ function forward(client: Client, host: string, port: number): Promise<ClientChan
 }
 
 /** The login shell's path ($SHELL), or undefined when the server refuses exec. */
-export function probeShell(client: Client, timeoutMs = 3000): Promise<string | undefined> {
+function probeShell(client: Client, timeoutMs = 3000): Promise<string | undefined> {
   return new Promise((resolve) => {
     let output = '';
     let done = false;

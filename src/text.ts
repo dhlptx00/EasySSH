@@ -46,16 +46,6 @@ export function truncate(text: string, width: number): string {
   return `${out}…`;
 }
 
-export function padRight(text: string, width: number): string {
-  const gap = width - displayWidth(text);
-  return gap > 0 ? text + ' '.repeat(gap) : text;
-}
-
-export function padLeft(text: string, width: number): string {
-  const gap = width - displayWidth(text);
-  return gap > 0 ? ' '.repeat(gap) + text : text;
-}
-
 export function formatSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
   if (bytes < 1024) return `${Math.floor(bytes)} B`;
@@ -116,21 +106,6 @@ export function safeFileName(name: string, platform: NodeJS.Platform = process.p
   return cleaned;
 }
 
-export function uniqueLocalPath(dir: string, name: string, exists: (path: string) => boolean): string {
-  const sep = dir.includes('\\') ? '\\' : '/';
-  const root = dir.replace(/[/\\]+$/, '');
-  const target = `${root}${sep}${name}`;
-  if (!exists(target)) return target;
-  const dot = name.lastIndexOf('.');
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : '';
-  for (let i = 1; i < 1000; i += 1) {
-    const candidate = `${root}${sep}${stem} (${i})${ext}`;
-    if (!exists(candidate)) return candidate;
-  }
-  return target;
-}
-
 export function expandHome(input: string, home: string): string {
   if (input === '~') return home;
   if (input.startsWith('~/') || input.startsWith('~\\')) return home + input.slice(1);
@@ -142,4 +117,31 @@ export function formatFingerprint(hex: string): string {
   if (!/^[0-9a-f]+$/.test(compact) || compact.length % 2 !== 0) return hex;
   const bytes = Buffer.from(compact, 'hex');
   return `SHA256:${bytes.toString('base64').replace(/=+$/, '')}`;
+}
+
+/** "just now", "5 min ago", "2 h ago", "3 d ago", "6 wk ago", "4 mo ago", "2 y ago". */
+export function relativeTime(ms: number | undefined, now = Date.now()): string {
+  if (!ms || !Number.isFinite(ms)) return '';
+  const seconds = Math.max(0, Math.floor((now - ms) / 1000));
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days} d ago`;
+  if (days < 60) return `${Math.floor(days / 7)} wk ago`;
+  if (days < 365) return `${Math.floor(days / 30)} mo ago`;
+  return `${Math.floor(days / 365)} y ago`;
+}
+
+/** OpenSSH-style glob: * any run, ? one character, case-insensitive, whole string. */
+export function globMatch(pattern: string, value: string): boolean {
+  let source = '^';
+  for (const ch of pattern) {
+    if (ch === '*') source += '.*';
+    else if (ch === '?') source += '.';
+    else source += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`${source}$`, 'i').test(value);
 }

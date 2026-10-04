@@ -9,7 +9,7 @@ export interface ParsedConfig {
 }
 
 /** Tokenize one ssh_config line. `=` between a keyword and its value is optional. */
-export function tokenizeConfigLine(line: string): string[] {
+function tokenizeConfigLine(line: string): string[] {
   const tokens: string[] = [];
   let current = '';
   let quote: '"' | "'" | null = null;

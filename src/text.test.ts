@@ -9,7 +9,6 @@ import {
   safeFileName,
   shortenPath,
   truncate,
-  uniqueLocalPath,
 } from './text';
 
 describe('text', () => {
@@ -41,8 +40,6 @@ describe('text', () => {
     assert.equal(safeFileName('console.log', 'win32'), 'console.log');
     assert.equal(safeFileName('捕获.PNG', 'win32'), '捕获.PNG');
     assert.equal(safeFileName('backup_09:12.tar.gz', 'linux'), 'backup_09:12.tar.gz');
-    const exists = (file: string) => file === '/tmp/notes.txt';
-    assert.equal(uniqueLocalPath('/tmp', 'notes.txt', exists), '/tmp/notes (1).txt');
   });
 
   it('expands a tilde and formats a host key', () => {

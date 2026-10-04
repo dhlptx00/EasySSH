@@ -19,7 +19,9 @@ import { RemoteFiles, overwriteText, type EditorSession, type EditorTarget, type
 import { EASYSSH_SCHEME } from './remoteFsProvider';
 import type { UploadQuestion } from './terminal/cwdTracking';
 import { expandHome, formatFingerprint } from './text';
-import type { ConflictChoice, ConnectionRecord } from './types';
+import type { ConflictChoice, ConnectionRecord, SecretPayload, SecretUpdate } from './types';
+import { editorThemeKind, parseColorDepth } from './terminal/theme';
+import type { ConnectUi } from './ssh/session';
 
 class PathLink extends vscode.TerminalLink {
   constructor(
@@ -614,6 +616,49 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
     return folder;
   }
 
+  /** Open an SSH session with the user's settings. */
+  private openFor(
+    record: ConnectionRecord,
+    secret: SecretPayload,
+    options: { signal: AbortSignal; ui: ConnectUi },
+    onClose: (reason?: string) => void,
+  ): ReturnType<typeof openSession> {
+    const config = settings();
+    const home = os.homedir();
+    return openSession({
+      record,
+      secret,
+      known: {
+        get: (id) => this.store.getHostKey(id),
+        trust: (id, fingerprint) => this.store.trustHost(id, fingerprint),
+      },
+      knownHosts: readKnownHosts(home),
+      hostKeyPolicy: config.get<HostKeyPolicy>('hostKeyPolicy') === 'trustFirst' ? 'trustFirst' : 'ask',
+      writeKnownHost: config.get<boolean>('knownHostsWriteBack') === true ? (line) => appendKnownHost(home, line) : undefined,
+      ui: options.ui,
+      readyTimeout: numberSetting(config.get('readyTimeout'), 20000, 3000, 600000),
+      keepaliveInterval: numberSetting(config.get('keepaliveInterval'), 15000, 0, 3600000),
+      keepaliveCountMax: numberSetting(config.get('keepaliveCountMax'), 3, 1, 100),
+      agent: resolveAgent(process.env, process.platform, config.get<string>('windowsAgent'), exists),
+      identityFiles: defaultIdentityFiles(home, exists),
+      signal: options.signal,
+      onClose,
+      log: (line) => this.output.appendLine(line),
+    });
+  }
+
+  /** The secret a test uses: the typed one, the stored one ("keep"), or none. */
+  private async secretFor(id: string, update: SecretUpdate): Promise<SecretPayload> {
+    if (update.action === 'keep') return this.store.secret(id);
+    if (update.action === 'clear') return {};
+    return { password: update.password, passphrase: update.passphrase };
+  }
+
+  /** VS Code's theme, the color depth or easySsh.themeSession changed: redraw every Easy SSH terminal. */
+  refreshThemes(): void {
+    for (const live of this.lives) live.app.refreshTheme();
+  }
+
   private createHost(app: () => EasySshApp): AppHost {
     const liveOf = () => this.lives.find((item) => item.app === app());
     return {
@@ -624,34 +669,29 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
       importConfig: () => this.importConfig(),
       connect: async (record, options) => {
         const secret = await this.store.secret(record.id);
-        const config = settings();
-        const home = os.homedir();
-        const opened = await openSession({
-          record,
-          secret,
-          known: {
-            get: (id) => this.store.getHostKey(id),
-            trust: (id, fingerprint) => this.store.trustHost(id, fingerprint),
-          },
-          knownHosts: readKnownHosts(home),
-          hostKeyPolicy: config.get<HostKeyPolicy>('hostKeyPolicy') === 'trustFirst' ? 'trustFirst' : 'ask',
-          writeKnownHost: config.get<boolean>('knownHostsWriteBack') === true ? (line) => appendKnownHost(home, line) : undefined,
-          ui: options.ui,
-          readyTimeout: numberSetting(config.get('readyTimeout'), 20000, 3000, 600000),
-          keepaliveInterval: numberSetting(config.get('keepaliveInterval'), 15000, 0, 3600000),
-          keepaliveCountMax: numberSetting(config.get('keepaliveCountMax'), 3, 1, 100),
-          agent: resolveAgent(process.env, process.platform, config.get<string>('windowsAgent'), exists),
-          identityFiles: defaultIdentityFiles(home, exists),
-          signal: options.signal,
-          onClose: (reason) => app().onRemoteClose(reason),
-          log: (line) => this.output.appendLine(line),
-        });
+        const opened = await this.openFor(record, secret, options, (reason) => app().onRemoteClose(reason));
         if (opened.savePassword) {
           await this.store.savePassword(record.id, opened.savePassword);
           this.output.appendLine(`Saved the password for ${record.name}`);
         }
         return opened;
       },
+      testConnection: async (record, update, options) => {
+        const secret = await this.secretFor(record.id, update);
+        this.output.appendLine(`Testing ${record.username}@${record.host}:${record.port}`);
+        const opened = await this.openFor(record, secret, options, () => undefined);
+        const files = opened.session.hasFiles ? opened.session.hasFiles() : true;
+        opened.session.close();
+        return { detail: files ? 'SFTP works' : 'terminal only, no SFTP' };
+      },
+      lastUsed: () => this.store.lastUsed(),
+      markUsed: (id) => this.store.markUsed(id),
+      theme: () => ({
+        // activeColorTheme is missing in old hosts and test stubs: count those as dark.
+        editorKind: editorThemeKind((vscode.window.activeColorTheme as vscode.ColorTheme | undefined)?.kind ?? 2),
+        depth: parseColorDepth(settings().get<string>('colorDepth')),
+        session: settings().get<boolean>('themeSession') !== false,
+      }),
       downloadFolder: () => this.downloadFolder(),
       downloadLabel: () => downloadFolderLabel(this.downloadFolder(), this.folders.desktop, os.homedir()),
       plainClick: () => this.plainClick(),
