@@ -29,7 +29,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.onDidChangeActiveColorTheme(() => controller.refreshThemes()),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('easySsh.theme')) controller.onThemeSettingChanged();
-      else if (event.affectsConfiguration('easySsh.colorDepth') || event.affectsConfiguration('easySsh.themeSession') || event.affectsConfiguration('easySsh.devPalette')) controller.refreshThemes();
+      else if (event.affectsConfiguration('easySsh.colorDepth') || event.affectsConfiguration('easySsh.themeSession')) controller.refreshThemes();
     }),
     vscode.workspace.registerFileSystemProvider(EASYSSH_SCHEME, new EasySshFileSystem(controller.remoteFiles), { isCaseSensitive: true }),
     vscode.workspace.onDidCloseTextDocument((document) => {

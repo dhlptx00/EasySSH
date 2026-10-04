@@ -94,7 +94,7 @@ For password sign-in you choose whether Easy SSH saves the password or asks for 
 
 ### Themes
 
-The Easy SSH screens come in two palettes based on the Easy SSH icon: **Easy SSH Dark** (violet and pink on deep indigo) and **Easy SSH Light** (on lavender white). `/theme` cycles Auto, Dark and Light; Auto follows VS Code's theme (light and high-contrast light themes get Easy SSH Light). The choice is saved in the `easySsh.theme` setting. Connected shells use the same palette too, in Easy SSH terminals only; turn that off with `easySsh.themeSession`. `easySsh.colorDepth` switches to 256 or 16 colors if colors look wrong.
+The Easy SSH screens come in two palettes based on the Easy SSH icon, **Easy SSH Dark** and **Easy SSH Light**. Both sit on VS Code's own terminal background and use the icon's purple and pink only for the brand mark, accents and a soft tint on the selected row. `/theme` cycles Auto, Dark and Light; Auto follows VS Code's theme (light and high-contrast light themes get Easy SSH Light). The choice is saved in the `easySsh.theme` setting. Connected shells get the palette's cursor and ANSI colors too, in Easy SSH terminals only; turn that off with `easySsh.themeSession`. `easySsh.colorDepth` switches to 256 or 16 colors if colors look wrong.
 
 ## Remote shell
 
@@ -263,8 +263,7 @@ With SSH agent sign-in, Easy SSH tries the agent first, then `~/.ssh/id_ed25519`
 | `easySsh.readyTimeout` | `20000` | Handshake timeout in ms; time spent on prompts doesn't count |
 | `easySsh.theme` | `auto` | Easy SSH colors: `auto` (follow VS Code), `dark` or `light`; `/theme` changes it |
 | `easySsh.colorDepth` | `truecolor` | Colors the Easy SSH screens use: `truecolor`, `256` or `16` |
-| `easySsh.themeSession` | `true` | Also color connected shells in Easy SSH terminals with the Easy SSH theme |
-| `easySsh.devPalette` | `""` | Temporary, for reviewing color options (A to F). Will be removed |
+| `easySsh.themeSession` | `true` | Also give connected shells in Easy SSH terminals the Easy SSH cursor and ANSI colors |
 
 ## How it compares
 

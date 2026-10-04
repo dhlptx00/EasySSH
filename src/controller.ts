@@ -12,7 +12,6 @@ import type { HostKeyPolicy } from './ssh/hostKeys';
 import { ConnectionStore } from './store';
 import { EasySshApp } from './terminal/app';
 import { shortRemote, type ActionMenu, type FileAction } from './terminal/actions';
-import { parseVariant } from './terminal/palettes';
 import type { AppHost, ProgressHandle, RenameRequest } from './terminal/host';
 import { EasySshPty } from './terminal/pty';
 import type { LineLink } from './terminal/render';
@@ -721,8 +720,6 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
         editorKind: editorThemeKind((vscode.window.activeColorTheme as vscode.ColorTheme | undefined)?.kind ?? 2),
         depth: parseColorDepth(settings().get<string>('colorDepth')),
         session: settings().get<boolean>('themeSession') !== false,
-        // Temporary: color options under review.
-        variant: parseVariant(settings().get<string>('devPalette')),
       }),
       setTheme: (choice) => this.setTheme(choice),
       downloadFolder: () => this.downloadFolder(),

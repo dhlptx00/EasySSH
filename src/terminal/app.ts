@@ -45,12 +45,12 @@ import {
   resolveThemeKind,
   SESSION_COLOR_RESET,
   oscColor,
+  paletteOn,
   sessionColorSequence,
   sessionColorsFor,
   themeLabel,
   type PaintTheme,
 } from './theme';
-import { resolvePalette } from './palettes';
 import {
   applyChoice,
   applyStep,
@@ -1026,7 +1026,7 @@ export class EasySshApp {
   private paintTheme(): PaintTheme {
     const state = this.host.theme?.();
     if (!state) return DEFAULT_THEME;
-    return { palette: resolvePalette(resolveThemeKind(state.choice, state.editorKind), state.variant), depth: state.depth };
+    return { palette: paletteOn(resolveThemeKind(state.choice, state.editorKind), state.editorKind), depth: state.depth };
   }
 
   private onShellChunk(chunk: string): void {
@@ -1302,7 +1302,7 @@ export class EasySshApp {
     }
     this.sessionPainted = true;
     const kind = resolveThemeKind(state.choice, state.editorKind);
-    return sessionColorSequence(sessionColorsFor(kind, state.variant ? resolvePalette(kind, state.variant) : undefined));
+    return sessionColorSequence(sessionColorsFor(kind, paletteOn(kind, state.editorKind)));
   }
 
   /** Show bytes in the terminal and keep a copy for click hit-testing. */

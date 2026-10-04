@@ -322,7 +322,8 @@ describe('session colors', () => {
     await flush();
     const connected = chunks.join('');
     assert.match(connected, /\x1b\]112\x07/, 'the menu cursor color is reset before the shell');
-    assert.match(connected, /\x1b\]11;#f5f3ff\x07/, 'Easy SSH Light background in the session');
+    assert.match(connected, /\x1b\]11;#ffffff\x07/, 'Easy SSH Light on a dark VS Code theme brings its own background');
+    assert.match(connected, /\x1b\]12;#be185d\x07/, 'the pink cursor');
     chunks.length = 0;
     session = false;
     app.refreshTheme();
@@ -333,6 +334,24 @@ describe('session colors', () => {
     app.onRemoteClose('gone');
     await flush();
     assert.match(chunks.join(''), /\x1b\]104\x07\x1b\]110\x07\x1b\]111\x07\x1b\]112\x07/, 'leaving the session restores the colors');
+    app.dispose();
+  });
+
+  it('keeps the terminal background in a session when the palette matches VS Code', async () => {
+    const remote = fakeRemote();
+    const chunks: string[] = [];
+    const app = new EasySshApp({ ...remote.host, theme: () => ({ choice: 'auto', editorKind: 'dark', depth: 'truecolor', session: true }) }, (data) => chunks.push(data));
+    app.setSize(100, 30);
+    app.open();
+    await flush();
+    chunks.length = 0;
+    app.onInput([{ type: 'key', key: 'enter' }]);
+    await flush();
+    await flush();
+    const connected = chunks.join('');
+    assert.doesNotMatch(connected, /\x1b\]1[01];/);
+    assert.match(connected, /\x1b\]12;#f59ac8\x07/);
+    assert.match(connected, /\x1b\]4;1;#f87171\x07/);
     app.dispose();
   });
 });

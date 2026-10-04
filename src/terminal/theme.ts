@@ -1,7 +1,8 @@
 /**
  * Easy SSH palettes for the screens drawn in the terminal (home, wizards, prompts).
  * Hues come from the icon and the README infographic: violet #8B5CF6 / #7C3AED,
- * lilac #A78BFA, pink #EC4899 / #F9A8D4, ink #1E1B4B, paper #F5F3FF.
+ * lilac #B39DFA, pink #EC4899 / #F59AC8. The screens use the terminal's own
+ * background; only the brand mark, accents and selection carry the colors.
  */
 
 /** What the user picked: follow VS Code, or a fixed palette. */
@@ -27,18 +28,10 @@ export type Role =
   | 'error'
   /** Agent sign-in, host keys, info notices. */
   | 'info'
-  /** Text on the selection bar. */
-  | 'selText'
-  /** Secondary text on the selection bar. */
-  | 'selMuted';
+  /** Plain text on the selected row's tint. */
+  | 'selText';
 
 export type Rgb = readonly [number, number, number];
-
-/**
- * How a selected row looks: a solid bar with its own text colors, a soft tint
- * that keeps the row's colors, or no fill and a ▌ marker with bold text.
- */
-export type SelectStyle = 'bar' | 'tint' | 'marker';
 
 export interface Palette {
   kind: ThemeKind;
@@ -49,13 +42,9 @@ export interface Palette {
   panel?: Rgb;
   /** The background the colors were picked for when there is no panel (VS Code's default). */
   canvas?: Rgb;
-  /** The selected row's full-width bar (bar and tint styles). */
+  /** The selected row's full-width tint. Rows keep their colors on it. */
   selection: Rgb;
-  /** Bar by default. */
-  selectStyle?: SelectStyle;
-  /** Color of the › (or ▌) selection marker. The accent by default. */
-  marker?: Role;
-  /** The bar of a selected destructive choice (Yes, delete). */
+  /** The tint of a selected destructive choice (Yes, delete). */
   danger: Rgb;
   /** The brand badge runs from this color to accent2's hue. */
   badgeFrom: Rgb;
@@ -67,48 +56,53 @@ export function hex(value: string): Rgb {
   return [parseInt(clean.slice(0, 2), 16), parseInt(clean.slice(2, 4), 16), parseInt(clean.slice(4, 6), 16)];
 }
 
-export const DARK: Palette & { panel: Rgb } = {
+/**
+ * Easy SSH Dark: no painted panel, so the screens sit on VS Code's own terminal
+ * background. Purple and pink only for the brand mark, accents and a soft
+ * selected-row tint. Colors are checked against VS Code's default dark
+ * terminal background (#1F1F1F).
+ */
+export const DARK: Palette = {
   kind: 'dark',
   name: 'Easy SSH Dark',
+  canvas: hex('#1F1F1F'),
   fg: {
-    text: hex('#F5F3FF'),
-    muted: hex('#A5A0C8'),
-    accent: hex('#A78BFA'),
-    accent2: hex('#F9A8D4'),
-    border: hex('#7C5CD6'),
-    success: hex('#86EFAC'),
-    warn: hex('#FCD34D'),
-    error: hex('#FCA5A5'),
-    info: hex('#67E8F9'),
+    text: hex('#E6E6EA'),
+    muted: hex('#9E9AAE'),
+    accent: hex('#B39DFA'),
+    accent2: hex('#F59AC8'),
+    border: hex('#57506E'),
+    success: hex('#86D99B'),
+    warn: hex('#E9C46A'),
+    error: hex('#F59393'),
+    info: hex('#6FD3E3'),
     selText: hex('#FFFFFF'),
-    selMuted: hex('#EDE9FE'),
   },
-  panel: hex('#1B1740'),
-  selection: hex('#6D28D9'),
-  danger: hex('#B91C1C'),
+  selection: hex('#2F2A42'),
+  danger: hex('#4A2026'),
   badgeFrom: hex('#8B5CF6'),
   badgeTo: hex('#EC4899'),
 };
 
-export const LIGHT: Palette & { panel: Rgb } = {
+/** Easy SSH Light: the same approach on VS Code's default light background (#FFFFFF). */
+export const LIGHT: Palette = {
   kind: 'light',
   name: 'Easy SSH Light',
+  canvas: hex('#FFFFFF'),
   fg: {
-    text: hex('#1E1B4B'),
-    muted: hex('#5F587F'),
+    text: hex('#1F2328'),
+    muted: hex('#5E5A6E'),
     accent: hex('#6D28D9'),
     accent2: hex('#BE185D'),
-    border: hex('#8B5CF6'),
-    success: hex('#166534'),
+    border: hex('#B9A7EE'),
+    success: hex('#1A6B35'),
     warn: hex('#8A4B00'),
     error: hex('#B91C1C'),
     info: hex('#155E75'),
-    selText: hex('#FFFFFF'),
-    selMuted: hex('#EDE9FE'),
+    selText: hex('#1E1B4B'),
   },
-  panel: hex('#F5F3FF'),
-  selection: hex('#7C3AED'),
-  danger: hex('#DC2626'),
+  selection: hex('#EEE9FB'),
+  danger: hex('#FDE4E4'),
   badgeFrom: hex('#7C3AED'),
   badgeTo: hex('#DB2777'),
 };
@@ -135,6 +129,18 @@ export function resolveThemeKind(choice: ThemeChoice, editorKind: ThemeKind): Th
 
 export function paletteFor(kind: ThemeKind): Palette {
   return kind === 'light' ? LIGHT : DARK;
+}
+
+/**
+ * The palette to draw for a kind on VS Code's current theme. The palettes use
+ * the terminal's own background; when /theme picks the other kind (Light on a
+ * dark VS Code theme), the boxes and the session get that palette's background
+ * so the text stays readable.
+ */
+export function paletteOn(kind: ThemeKind, editorKind: ThemeKind): Palette {
+  const palette = paletteFor(kind);
+  if (kind === editorKind || palette.panel) return palette;
+  return { ...palette, panel: surfaceOf(palette) };
 }
 
 /** What the palette's colors sit on: its panel, or the terminal background it was picked for. */
@@ -252,38 +258,27 @@ export interface SessionColors {
   ansi: Rgb[];
 }
 
-const DARK_SESSION: SessionColors = {
-  background: DARK.panel,
-  foreground: DARK.fg.text,
-  cursor: hex('#F9A8D4'),
-  ansi: [
-    '#2A2550', '#F87171', '#86EFAC', '#FCD34D', '#8AB4FF', '#E879F9', '#67E8F9', '#E9E5FF',
-    '#8A84B8', '#FCA5A5', '#BBF7D0', '#FDE68A', '#A5B4FC', '#F9A8D4', '#A5F3FC', '#FFFFFF',
-  ].map(hex),
-};
-
-const LIGHT_SESSION: SessionColors = {
-  background: LIGHT.panel,
-  foreground: LIGHT.fg.text,
-  cursor: hex('#DB2777'),
-  ansi: [
-    '#1E1B4B', '#B91C1C', '#166534', '#8A4B00', '#1D4ED8', '#A21CAF', '#155E75', '#5F587F',
-    '#6B6390', '#C81E1E', '#15803D', '#92400E', '#4F46E5', '#BE185D', '#0E7490', '#3B3663',
-  ].map(hex),
-};
-
 /**
- * Colors for a connected shell. With a palette, its panel, text and pink; a
- * palette without a panel leaves the terminal's background and text alone.
+ * ANSI colors for connected shells, tuned for VS Code's default terminal
+ * backgrounds. The background and text color stay the terminal's own.
  */
-export function sessionColorsFor(kind: ThemeKind, palette?: Palette): SessionColors {
-  const base = kind === 'light' ? LIGHT_SESSION : DARK_SESSION;
-  if (!palette) return base;
+const DARK_ANSI: Rgb[] = [
+  '#3A3550', '#F87171', '#86D99B', '#E9C46A', '#8AB4FF', '#D68CF5', '#6FD3E3', '#E6E6EA',
+  '#8E89A3', '#FCA5A5', '#BBF7D0', '#FDE68A', '#A5B4FC', '#F59AC8', '#A5F3FC', '#FFFFFF',
+].map(hex);
+
+const LIGHT_ANSI: Rgb[] = [
+  '#1F2328', '#B91C1C', '#1A6B35', '#8A4B00', '#1D4ED8', '#A21CAF', '#155E75', '#5E5A6E',
+  '#6B6680', '#C81E1E', '#15803D', '#92400E', '#4F46E5', '#BE185D', '#0E7490', '#3B3663',
+].map(hex);
+
+/** Colors for a connected shell: the palette's pink cursor and its ANSI colors. */
+export function sessionColorsFor(kind: ThemeKind, palette: Palette = paletteFor(kind)): SessionColors {
   return {
     background: palette.panel,
     foreground: palette.panel ? palette.fg.text : undefined,
     cursor: palette.fg.accent2,
-    ansi: base.ansi,
+    ansi: kind === 'light' ? LIGHT_ANSI : DARK_ANSI,
   };
 }
 

@@ -269,15 +269,7 @@
           "type": "boolean",
           "default": true,
           "order": 15,
-          "markdownDescription": "Also color connected shell sessions with the Easy SSH theme: background, text, cursor and the 16 ANSI colors. Only Easy SSH terminals change, through terminal color sequences; your other terminals and settings are untouched, and the terminal's own colors come back when you leave the session."
-        },
-        "easySsh.devPalette": {
-          "type": "string",
-          "default": "",
-          "enum": ["", "A", "B", "C", "D", "E", "F"],
-          "enumDescriptions": ["Current palette", "A: Neutral", "B: Pastel", "C: Graphite", "D: Neon", "E: Indigo", "F: Mono"],
-          "order": 99,
-          "markdownDescription": "Temporary, for reviewing color options. Will be removed once one is chosen."
+          "markdownDescription": "Also color connected shell sessions with the Easy SSH theme: the cursor and the 16 ANSI colors (the background and text stay the terminal's own). Only Easy SSH terminals change, through terminal color sequences; your other terminals and settings are untouched, and the terminal's own colors come back when you leave the session."
         }
       }
     }

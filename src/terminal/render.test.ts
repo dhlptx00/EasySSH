@@ -3,8 +3,7 @@ import { describe, it } from 'node:test';
 import type { BrowseEntry } from '../types';
 import { homeTips, nameSpans, render, type Frame } from './render';
 import type { ConnectionItem, Screen } from './screen';
-import { VARIANTS } from './palettes';
-import { DARK, LIGHT, type PaintTheme } from './theme';
+import { DARK, LIGHT, mix, type PaintTheme } from './theme';
 import { emptyDraft } from './wizard';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -141,25 +140,38 @@ describe('terminal screen', () => {
     assert.doesNotMatch(filtered, /Add a connection/);
   });
 
-  it('paints every screen in the active palette with no leftover orange', () => {
-    const light: PaintTheme = { palette: LIGHT, depth: 'truecolor' };
+  it('paints every screen only in the active palette, on the terminal background', () => {
     const screens: Screen[] = [
       home(2),
       home(2, '/'),
+      { kind: 'connections', items, selected: 2, command: '', pick: 0, notice: { tone: 'ok', text: 'Imported 2 hosts' } },
+      { kind: 'connections', items: [], selected: 0, command: '', pick: 0 },
       { kind: 'wizard', title: 'new connection', draft: emptyDraft(), step: 'host', input: 'x', pick: 0 },
-      { kind: 'summary', mode: 'new', title: 'new connection', draft: { ...emptyDraft(), name: 'a', host: 'h', username: 'u', auth: 'agent', jumpMode: 'none' }, choice: 7 },
+      { kind: 'wizard', title: 'new connection', draft: emptyDraft(), step: 'port', input: 'x', pick: 0, error: 'Port must be a number, such as 22' },
+      { kind: 'wizard', title: 'new connection', draft: emptyDraft(), step: 'auth', input: '', pick: 1 },
+      { kind: 'summary', mode: 'new', title: 'new connection', draft: { ...emptyDraft(), name: 'a', host: 'h', username: 'u', auth: 'agent', jumpMode: 'none' }, choice: 7, test: { ok: true, text: 'Connected' } },
+      { kind: 'summary', mode: 'edit', title: 'edit a', draft: { ...emptyDraft(), name: 'a', host: 'h', username: 'u', auth: 'agent', jumpMode: 'none' }, choice: 1, test: { ok: false, text: 'Could not resolve the host' } },
+      { kind: 'pick', mode: 'edit', items, selected: 1 },
       { kind: 'confirm', item: items[1], choice: 1 },
     ];
-    for (const screen of screens) {
-      const styled = render(screen, { ...view, theme: light }).lines.map((line) => line.styled).join('');
-      assert.ok(!styled.includes('250;178;131'), `${screen.kind}: no hardcoded orange`);
-      assert.ok(!styled.includes('48;48;48'), `${screen.kind}: no hardcoded gray bar`);
-      assert.ok(styled.includes(`48;2;${rgb(LIGHT.panel)}`), `${screen.kind}: light panel`);
-      assert.ok(!styled.includes(`48;2;${rgb(DARK.panel)}`), `${screen.kind}: not the dark panel`);
+    for (const palette of [DARK, LIGHT]) {
+      const theme: PaintTheme = { palette, depth: 'truecolor' };
+      const badge = Array.from({ length: 7 }, (_, index) => rgb(mix(palette.badgeFrom, palette.badgeTo, index / 6)));
+      const backgrounds = new Set([rgb(palette.selection), rgb(palette.danger), ...badge]);
+      const foregrounds = new Set([...Object.values(palette.fg).map(rgb), '255;255;255']);
+      for (const screen of screens) {
+        const styled = render(screen, { ...view, theme }).lines.map((line) => line.styled).join('');
+        for (const [, color] of styled.matchAll(/48;2;(\d+;\d+;\d+)/g)) {
+          assert.ok(backgrounds.has(color), `${palette.name} ${screen.kind}: background ${color} is the selection, the delete tint or the badge`);
+        }
+        for (const [, color] of styled.matchAll(/38;2;(\d+;\d+;\d+)/g)) {
+          assert.ok(foregrounds.has(color), `${palette.name} ${screen.kind}: text color ${color} is from the palette`);
+        }
+      }
+      const prompt = render(home(2), { ...view, theme });
+      assert.ok(prompt.cursor);
+      assert.ok(prompt.lines[prompt.cursor.row].styled.includes(`38;2;${rgb(palette.fg.accent)}`), 'the > prompt is in the accent');
     }
-    const prompt = render(home(2), { ...view, theme: light });
-    assert.ok(prompt.cursor);
-    assert.ok(prompt.lines[prompt.cursor.row].styled.includes(`38;2;${rgb(LIGHT.fg.accent)}`), 'the > prompt is in the accent');
   });
 
   it('uses 256-color codes when asked', () => {
@@ -339,27 +351,4 @@ describe('terminal screen', () => {
     });
   });
 
-  describe('palette variants', () => {
-    for (const variant of Object.values(VARIANTS)) {
-      for (const palette of [variant.dark, variant.light]) {
-        it(`${variant.id} ${palette.kind} paints the home screen in its own colors`, () => {
-          const frame = render(home(2), { ...view, theme: { palette, depth: 'truecolor' } });
-          const selected = frame.lines.find((line) => line.plain.includes('prod-web.example') && !line.plain.includes('Last:'));
-          assert.ok(selected);
-          if (palette.selectStyle === 'marker') {
-            assert.match(selected.plain, /▌ prod-web/);
-            assert.ok(palette.panel, 'marker palettes paint a panel');
-            // No bar: the row has the panel background like the others.
-            assert.ok(selected.styled.includes(`48;2;${rgb(palette.panel)}`));
-          } else {
-            assert.match(selected.plain, /› prod-web/);
-            assert.ok(selected.styled.includes(`48;2;${rgb(palette.selection)}`));
-          }
-          const styled = frame.lines.map((line) => line.styled).join('');
-          if (palette.panel) assert.ok(styled.includes(`48;2;${rgb(palette.panel)}`));
-          else assert.ok(!styled.includes(`48;2;${rgb(DARK.panel)}`) && !styled.includes(`48;2;${rgb(LIGHT.panel)}`), 'no painted panel');
-        });
-      }
-    }
-  });
 });

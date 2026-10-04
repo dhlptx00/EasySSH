@@ -4,7 +4,7 @@ import { classifyName } from '../fileTypes';
 import type { BrowseEntry, Notice } from '../types';
 import { assignConnectionTokens, matchSlashCommands, type SlashCommand, type SlashTarget } from './commands';
 import { SUMMARY_ACTIONS, type ConnectionItem, type Screen, type SummaryAction } from './screen';
-import { colorCode, DEFAULT_THEME, mix, type PaintTheme, type Rgb, type Role, type SelectStyle } from './theme';
+import { colorCode, DEFAULT_THEME, mix, type PaintTheme, type Rgb, type Role } from './theme';
 import {
   choiceOptions,
   FIELDS,
@@ -102,50 +102,19 @@ function pageColumn(cols: number): { left: number; width: number } {
   return { left, width: Math.min(width, cols - left) };
 }
 
-function selectStyle(): SelectStyle {
-  return current.palette.selectStyle ?? 'bar';
-}
-
 function fillColor(fill: Fill): Rgb | undefined {
   const palette = current.palette;
-  const marker = selectStyle() === 'marker';
   if (fill === 'panel') return palette.panel;
-  if (fill === 'select') return marker ? palette.panel : palette.selection;
-  if (fill === 'danger') return marker ? palette.panel : palette.danger;
+  if (fill === 'select') return palette.selection;
+  if (fill === 'danger') return palette.danger;
   return undefined;
 }
 
+/** A selected row is a soft tint: it keeps its colors, plain text gets brighter (or red on Delete). */
 function toneColor(tone: Tone, fill: Fill): Rgb {
   const palette = current.palette;
-  if (fill === 'select' || fill === 'danger') {
-    const style = selectStyle();
-    // A solid bar has its own text colors; a tint or a marker keeps the row's.
-    if (style === 'bar') return tone === 'muted' || tone === 'border' ? palette.fg.selMuted : palette.fg.selText;
-    if (tone === 'text') return fill === 'danger' ? palette.fg.error : palette.fg.selText;
-  }
+  if ((fill === 'select' || fill === 'danger') && tone === 'text') return fill === 'danger' ? palette.fg.error : palette.fg.selText;
   return palette.fg[tone];
-}
-
-/** The › of a selected row in the palette's marker color; a ▌ when the style has no bar. */
-function markSelection(pieces: Piece[], fill: Fill): Piece[] {
-  const style = selectStyle();
-  if (style === 'bar') return pieces;
-  const selectedFill = (piece: Piece) => {
-    const own = piece.fill ?? fill;
-    return own === 'select' || own === 'danger' ? own : undefined;
-  };
-  if (!pieces.some((piece) => selectedFill(piece))) return pieces;
-  let marked = false;
-  return pieces.map((piece) => {
-    const own = selectedFill(piece);
-    if (!own) return piece;
-    if (!marked && piece.text === '› ') {
-      marked = true;
-      const role: Tone = own === 'danger' ? 'error' : current.palette.marker ?? 'accent';
-      return { ...piece, text: style === 'marker' ? '▌ ' : '› ', fg: current.palette.fg[role], bold: true };
-    }
-    return style === 'marker' ? { ...piece, bold: true } : piece;
-  });
 }
 
 function sgr(fg: Rgb, bg: Rgb | undefined, bold: boolean, underline: boolean): string {
@@ -157,8 +126,7 @@ function sgr(fg: Rgb, bg: Rgb | undefined, bold: boolean, underline: boolean): s
   return `\x1b[${parts.join(';')}m`;
 }
 
-function paintPieces(input: Piece[], width: number, fill: Fill = 'panel'): PaintedLine {
-  const pieces = markSelection(input, fill);
+function paintPieces(pieces: Piece[], width: number, fill: Fill = 'panel'): PaintedLine {
   let plain = '';
   let styled = '';
   let used = 0;
@@ -409,7 +377,7 @@ function choiceRows(labels: string[], pick: number, _width: number, hints: strin
 function optionRow(label: string, hint: string, selected: boolean, nameWidth: number, bar: Fill): Row {
   const padded = label + ' '.repeat(Math.max(0, nameWidth - displayWidth(label)));
   const pieces: Piece[] = [
-    { text: selected ? '› ' : '  ', tone: 'accent', bold: true },
+    { text: selected ? '› ' : '  ', tone: bar === 'danger' ? 'error' : 'accent', bold: true },
     { text: padded, tone: bar === 'danger' && !selected ? 'error' : 'text', bold: selected },
   ];
   if (hint) pieces.push({ text: '  ' }, { text: hint, tone: 'muted' });
