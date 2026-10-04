@@ -23,7 +23,7 @@ describe('connection commands', () => {
   });
 
   it('lists and filters slash commands', () => {
-    assert.deepEqual(matchSlashCommands('/').map((command) => command.name), ['new', 'edit', 'delete', 'import', 'folder', 'quit']);
+    assert.deepEqual(matchSlashCommands('/').map((command) => command.name), ['new', 'edit', 'delete', 'import', 'folder', 'theme', 'quit']);
     assert.deepEqual(matchSlashCommands('/n').map((command) => command.name), ['new']);
     assert.deepEqual(matchSlashCommands('/ed').map((command) => command.name), ['edit']);
     assert.deepEqual(matchSlashCommands('/e').map((command) => command.name), ['edit']);

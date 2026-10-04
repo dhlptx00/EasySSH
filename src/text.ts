@@ -143,3 +143,19 @@ export function formatFingerprint(hex: string): string {
   const bytes = Buffer.from(compact, 'hex');
   return `SHA256:${bytes.toString('base64').replace(/=+$/, '')}`;
 }
+
+/** "just now", "5 min ago", "2 h ago", "3 d ago", "6 wk ago", "4 mo ago", "2 y ago". */
+export function relativeTime(ms: number | undefined, now = Date.now()): string {
+  if (!ms || !Number.isFinite(ms)) return '';
+  const seconds = Math.max(0, Math.floor((now - ms) / 1000));
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days} d ago`;
+  if (days < 60) return `${Math.floor(days / 7)} wk ago`;
+  if (days < 365) return `${Math.floor(days / 30)} mo ago`;
+  return `${Math.floor(days / 365)} y ago`;
+}

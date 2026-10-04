@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ConnectionRecord } from '../types';
-import { applyChoice, applyStep, draftFromRecord, emptyDraft, nextStep, toConnection } from './wizard';
+import { applyChoice, applyStep, draftFromRecord, emptyDraft, fieldOf, fieldValue, nextStep, sshCommand, stepPosition, toConnection, wizardPath } from './wizard';
 
 const ctx = {
   takenNames: ['Lab'],
@@ -107,5 +107,44 @@ describe('connection wizard', () => {
     draft = applyChoice('passwordMode', 'save', draft).draft;
     draft = applyStep('password', '', draft, ctx).draft;
     assert.deepEqual(toConnection(draft, '9').secret, { action: 'clear' });
+  });
+
+  it('counts the steps the draft walks through', () => {
+    const draft = emptyDraft();
+    assert.deepEqual(wizardPath(draft), ['name', 'host', 'port', 'username', 'auth', 'jumpChoice']);
+    assert.deepEqual(stepPosition('host', draft), { index: 2, total: 6 });
+    const key = { ...draft, auth: 'privateKey' as const, jumpMode: 'custom' as const };
+    assert.deepEqual(stepPosition('keyPath', key), { index: 6, total: 9 });
+    assert.deepEqual(stepPosition('passwordMode', { ...draft, auth: 'password' }, 'auth'), { index: 2, total: 3 });
+    assert.equal(fieldOf('passphrase'), 'auth');
+    assert.equal(fieldOf('jump'), 'jump');
+  });
+
+  it('rejects an empty host and a port that is not a number', () => {
+    assert.match(applyStep('host', '', emptyDraft(), ctx).error ?? '', /Host is required/);
+    assert.match(applyStep('host', 'a b', emptyDraft(), ctx).error ?? '', /spaces/);
+    assert.match(applyStep('port', 'abc', emptyDraft(), ctx).error ?? '', /must be a number/);
+    assert.match(applyStep('port', '0', emptyDraft(), ctx).error ?? '', /between 1 and 65535/);
+  });
+
+  it('previews the ssh command and never shows secrets', () => {
+    const draft = {
+      ...emptyDraft(),
+      name: 'db',
+      host: 'db.internal',
+      port: '2200',
+      username: 'pg',
+      auth: 'password' as const,
+      passwordMode: 'save' as const,
+      password: 'hunter2',
+      jumpMode: 'custom' as const,
+      jump: 'jump.example.com:2222, ops@[fd00::1]',
+    };
+    assert.equal(sshCommand(draft), 'ssh -p 2200 -o PreferredAuthentications=password,keyboard-interactive -J pg@jump.example.com:2222,ops@[fd00::1] pg@db.internal');
+    assert.equal(fieldValue('auth', draft), 'Password (new, stored securely)');
+    assert.ok(!sshCommand(draft).includes('hunter2'));
+    const key = { ...emptyDraft(), host: 'h', username: 'u', auth: 'privateKey' as const, keyPath: '/Users/me/.ssh/my key' };
+    assert.equal(sshCommand(key, '/Users/me'), "ssh -i ~/'.ssh/my key' u@h");
+    assert.equal(fieldValue('jump', key), 'None, direct connection');
   });
 });

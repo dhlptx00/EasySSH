@@ -26,6 +26,11 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('easySsh.cancelTransfer', () => controller.cancelTransfer()),
     vscode.window.registerTerminalLinkProvider(controller),
     vscode.window.onDidCloseTerminal((terminal) => controller.onClosed(terminal)),
+    vscode.window.onDidChangeActiveColorTheme(() => controller.refreshThemes()),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('easySsh.theme')) controller.onThemeSettingChanged();
+      else if (event.affectsConfiguration('easySsh.colorDepth') || event.affectsConfiguration('easySsh.themeSession')) controller.refreshThemes();
+    }),
     vscode.workspace.registerFileSystemProvider(EASYSSH_SCHEME, new EasySshFileSystem(controller.remoteFiles), { isCaseSensitive: true }),
     vscode.workspace.onDidCloseTextDocument((document) => {
       if (document.uri.scheme === EASYSSH_SCHEME) controller.remoteFiles.forget(document.uri.authority, document.uri.path);

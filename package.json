@@ -232,6 +232,44 @@
           "minimum": 3000,
           "order": 12,
           "markdownDescription": "How long to wait for an SSH handshake, in milliseconds. Time spent answering a prompt (password, host key) does not count."
+        },
+        "easySsh.theme": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "dark",
+            "light"
+          ],
+          "default": "auto",
+          "order": 13,
+          "enumDescriptions": [
+            "Easy SSH Light with a light VS Code theme, Easy SSH Dark otherwise.",
+            "Easy SSH Dark: violet and pink on deep indigo.",
+            "Easy SSH Light: violet and pink on lavender white."
+          ],
+          "markdownDescription": "Colors of the Easy SSH screens (connection list, `/new`, `/edit`, `/delete`). The `/theme` command cycles Auto, Dark and Light and updates this setting."
+        },
+        "easySsh.colorDepth": {
+          "type": "string",
+          "enum": [
+            "truecolor",
+            "256",
+            "16"
+          ],
+          "default": "truecolor",
+          "order": 14,
+          "enumDescriptions": [
+            "24-bit colors, as VS Code's terminal shows them.",
+            "The nearest of the 256 xterm colors.",
+            "The 16 ANSI colors of the terminal theme."
+          ],
+          "markdownDescription": "How many colors the Easy SSH screens use. Lower it only if colors look wrong, e.g. through a terminal multiplexer."
+        },
+        "easySsh.themeSession": {
+          "type": "boolean",
+          "default": true,
+          "order": 15,
+          "markdownDescription": "Also color connected shell sessions with the Easy SSH theme: background, text, cursor and the 16 ANSI colors. Only Easy SSH terminals change, through terminal color sequences; your other terminals and settings are untouched, and the terminal's own colors come back when you leave the session."
         }
       }
     }

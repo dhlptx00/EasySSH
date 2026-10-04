@@ -37,8 +37,36 @@ import { peelPointer, type PointerEvent } from './pointer';
 import { linkAt, nameSpans, paint, render, sessionHint, type LineLink } from './render';
 import { Viewport } from './viewport';
 import { classifyStale, FolderFollower, isHostSwitch, isUserSwitch, staleUploadQuestion, type StaleCwd } from './cwdTracking';
-import type { ConnectionItem, Screen } from './screen';
-import { applyChoice, applyStep, choiceIndex, choiceOptions, draftFromRecord, emptyDraft, nextStep, prevStep, toConnection } from './wizard';
+import { SUMMARY_ACTIONS, type ConnectionItem, type Screen } from './screen';
+import {
+  colorCode,
+  DEFAULT_THEME,
+  nextThemeChoice,
+  paletteFor,
+  resolveThemeKind,
+  SESSION_COLOR_RESET,
+  oscColor,
+  sessionColorSequence,
+  sessionColorsFor,
+  themeLabel,
+  type PaintTheme,
+} from './theme';
+import {
+  applyChoice,
+  applyStep,
+  choiceIndex,
+  choiceOptions,
+  draftFromRecord,
+  emptyDraft,
+  FIELDS,
+  fieldOf,
+  fieldStart,
+  nextStep,
+  prevStep,
+  toConnection,
+  wizardPath,
+  type Draft,
+} from './wizard';
 
 /** Connected shell. The login PTY is shown directly; this only tracks the directory. */
 interface RemoteShell {
@@ -93,14 +121,25 @@ interface PendingPrompt {
   answer: (value: AskAnswer | undefined) => void;
 }
 
-function describe(record: ConnectionRecord): ConnectionItem {
+/**
+ * A list row for a record. Jump hosts show by the name of a saved connection to
+ * the same host when there is one ("via bastion"), else by host.
+ */
+export function describe(record: ConnectionRecord, all: ConnectionRecord[] = [], lastUsed?: number): ConnectionItem {
   const auth = record.auth === 'privateKey' ? 'key' : record.auth;
-  const via = record.jumps.length ? ` via ${record.jumps.map((jump) => jump.host).join(',')}` : '';
+  const hopName = (host: string, port: number) =>
+    all.find((other) => other.id !== record.id && other.host === host && other.port === port)?.name ??
+    all.find((other) => other.id !== record.id && other.host === host)?.name ??
+    host;
+  const via = record.jumps.length ? record.jumps.map((jump) => hopName(jump.host, jump.port)).join(', ') : undefined;
   return {
     id: record.id,
     name: record.name,
     userHost: `${record.username}@${record.host}:${record.port}`,
-    detail: `${auth}${via}`,
+    detail: `${auth}${via ? ` via ${via}` : ''}`,
+    auth: record.auth,
+    via,
+    lastUsed,
   };
 }
 
@@ -132,6 +171,12 @@ export class EasySshApp {
   private shellTimer: ReturnType<typeof setTimeout> | undefined;
   private editingId: string | undefined;
   private selectedId: string | undefined;
+  /** Which home tip shows; moves on every visit to the list. */
+  private tipIndex = Math.floor(Math.random() * 6);
+  /** True while the connected shell shows the Easy SSH palette (OSC colors). */
+  private sessionPainted = false;
+  /** Cursor color set for the Easy SSH screens (OSC 12), reset before a shell. */
+  private menuCursor: string | undefined;
   private browseEpoch = 0;
   private tabEpoch = 0;
   private readonly inputLine = new InputLine();
@@ -396,6 +441,9 @@ export class EasySshApp {
       case 'wizard':
         await this.onWizard(event);
         return;
+      case 'summary':
+        await this.onSummary(event);
+        return;
       default: {
         const unreachable: never = this.screen;
         return unreachable;
@@ -409,7 +457,8 @@ export class EasySshApp {
       this.answerPending();
       return;
     }
-    if (this.screen.kind === 'wizard') {
+    if (this.screen.kind === 'wizard' || this.screen.kind === 'summary') {
+      this.editingId = undefined;
       await this.showConnections();
       return;
     }
@@ -622,7 +671,7 @@ export class EasySshApp {
       }
       case 'new':
         this.editingId = undefined;
-        this.screen = { kind: 'wizard', title: 'new connection', draft: emptyDraft(), step: 'name', input: '', pick: 0 };
+        this.screen = { kind: 'wizard', title: 'new connection', draft: emptyDraft(), step: 'name', input: '', pick: 0, mode: 'new' };
         this.draw();
         return;
       case 'edit':
@@ -637,11 +686,14 @@ export class EasySshApp {
       case 'folder':
         await this.pickFolder();
         return;
+      case 'theme':
+        await this.cycleTheme();
+        return;
       case 'quit':
         this.host.quit();
         return;
       case 'help':
-        this.showNotice('info', 'Commands: /new, /edit, /delete, /import, /folder, /quit. A connection name connects directly.');
+        this.showNotice('info', 'Commands: /new, /edit, /delete, /import, /folder, /theme, /quit. A connection name connects directly.');
         return;
       default: {
         const unreachable: never = action;
@@ -702,12 +754,11 @@ export class EasySshApp {
     this.editingId = record.id;
     this.selectedId = record.id;
     this.screen = {
-      kind: 'wizard',
+      kind: 'summary',
+      mode: 'edit',
       title: `edit ${record.name}`,
       draft: draftFromRecord(record, saved),
-      step: 'name',
-      input: '',
-      pick: 0,
+      choice: 0,
     };
     this.draw();
   }
@@ -745,8 +796,14 @@ export class EasySshApp {
     if (this.screen.kind !== 'wizard') return;
     const options = choiceOptions(this.screen.step);
     if (event.type === 'key' && event.key === 'escape') {
+      const field = this.screen.field;
+      if (field && this.screen.step === fieldStart(field)) {
+        this.toSummary(this.screen.draft, FIELDS.indexOf(field));
+        return;
+      }
       const back = prevStep(this.screen.step, this.screen.draft);
       if (back === 'start') {
+        this.editingId = undefined;
         await this.showConnections();
         return;
       }
@@ -799,6 +856,11 @@ export class EasySshApp {
       return;
     }
     const following = nextStep(this.screen.step, applied.draft);
+    const field = this.screen.field;
+    if (field && (following === 'done' || fieldOf(following) !== field)) {
+      this.toSummary(applied.draft, FIELDS.indexOf(field));
+      return;
+    }
     if (following !== 'done') {
       this.screen = {
         ...this.screen,
@@ -811,12 +873,153 @@ export class EasySshApp {
       this.draw();
       return;
     }
+    this.toSummary(applied.draft, FIELDS.length + SUMMARY_ACTIONS.indexOf('save'));
+  }
+
+  /** The review page after the last step, and the field picker of /edit. */
+  private toSummary(draft: Draft, choice: number): void {
+    const editing = this.editingId ? this.records.get(this.editingId) : undefined;
+    this.screen = {
+      kind: 'summary',
+      mode: editing ? 'edit' : 'new',
+      title: editing ? `edit ${editing.name}` : 'new connection',
+      draft,
+      choice,
+    };
+    this.draw();
+  }
+
+  private async onSummary(event: InputEvent): Promise<void> {
+    const screen = this.screen;
+    if (screen.kind !== 'summary') return;
+    const count = FIELDS.length + SUMMARY_ACTIONS.length;
+    if (event.type === 'key' && (event.key === 'up' || event.key === 'down')) {
+      this.screen = { ...screen, choice: move(screen.choice, event.key === 'up' ? -1 : 1, count) };
+      this.draw();
+      return;
+    }
+    if (event.type === 'key' && event.key === 'escape') {
+      await this.summaryAction('back');
+      return;
+    }
+    if (event.type === 'text') {
+      const key = event.text.toLowerCase();
+      if (key === 't') await this.summaryAction('test');
+      else if (key === 's') await this.summaryAction('save');
+      return;
+    }
+    if (event.type !== 'key' || event.key !== 'enter') return;
+    if (screen.choice < FIELDS.length) {
+      const field = FIELDS[screen.choice];
+      const step = fieldStart(field);
+      this.screen = {
+        kind: 'wizard',
+        title: screen.title,
+        draft: screen.draft,
+        step,
+        input: '',
+        pick: choiceIndex(step, screen.draft),
+        field,
+        mode: screen.mode,
+      };
+      this.draw();
+      return;
+    }
+    await this.summaryAction(SUMMARY_ACTIONS[screen.choice - FIELDS.length] ?? 'save');
+  }
+
+  private async summaryAction(action: (typeof SUMMARY_ACTIONS)[number]): Promise<void> {
+    const screen = this.screen;
+    if (screen.kind !== 'summary') return;
+    if (action === 'back') {
+      if (screen.mode === 'edit') {
+        this.editingId = undefined;
+        await this.showConnections({ tone: 'info', text: 'No changes saved' });
+        return;
+      }
+      const path = wizardPath(screen.draft);
+      const step = path[path.length - 1] ?? 'name';
+      this.screen = { kind: 'wizard', title: screen.title, draft: screen.draft, step, input: '', pick: choiceIndex(step, screen.draft), mode: 'new' };
+      this.draw();
+      return;
+    }
+    if (action === 'test') {
+      await this.testDraft();
+      return;
+    }
     const id = this.editingId ?? randomUUID();
-    const { record, secret } = toConnection(applied.draft, id);
+    const { record, secret } = toConnection(screen.draft, id);
     await this.host.saveConnection(record, secret);
     this.editingId = undefined;
     this.selectedId = id;
     await this.showConnections({ tone: 'ok', text: `Saved ${record.name}` });
+  }
+
+  /** Test connection: connect and sign in with the summary's values, then close. Nothing is saved. */
+  private async testDraft(): Promise<void> {
+    const summary = this.screen;
+    if (summary.kind !== 'summary') return;
+    const back = (ok: boolean, text: string) => {
+      if (this.closed) return;
+      this.screen = { ...summary, test: { ok, text }, notice: undefined };
+      this.draw();
+    };
+    if (!this.host.testConnection) {
+      back(false, 'Test connection is not available here');
+      return;
+    }
+    const { record, secret } = toConnection(summary.draft, this.editingId ?? `test-${randomUUID()}`);
+    const label = `${record.username}@${record.host}:${record.port}`;
+    const abort = new AbortController();
+    this.connectAbort = abort;
+    this.screen = { kind: 'connecting', label, title: 'Testing' };
+    this.draw();
+    const started = Date.now();
+    try {
+      const result = await this.host.testConnection(record, secret, { signal: abort.signal, ui: this.connectUi(abort) });
+      const seconds = ((Date.now() - started) / 1000).toFixed(1);
+      back(true, `Connected and signed in to ${label} in ${seconds} s${result.detail ? ` · ${result.detail}` : ''}. Not saved yet`);
+    } catch (err) {
+      this.answerPending();
+      if (abort.signal.aborted || err instanceof TransferCancelled) back(false, 'Test cancelled');
+      else if (err instanceof HostKeyDeclined) back(false, `Host key of ${err.host} was not trusted`);
+      else {
+        this.host.log(err instanceof Error ? err.message : String(err));
+        back(false, `Test failed: ${humanizeSshError(err)}`);
+      }
+    } finally {
+      if (this.connectAbort === abort) this.connectAbort = null;
+    }
+  }
+
+  /** /theme: Auto → Dark → Light → Auto. */
+  private async cycleTheme(): Promise<void> {
+    const state = this.host.theme?.();
+    if (!state || !this.host.setTheme) {
+      this.showNotice('info', 'Themes are not available here');
+      return;
+    }
+    const next = nextThemeChoice(state.choice);
+    await this.host.setTheme(next);
+    this.showNotice('ok', `Theme: ${themeLabel(next, state.editorKind)}. /theme again for the next one`);
+  }
+
+  /** Redraw after the theme, the VS Code theme kind, or the color depth changed. */
+  refreshTheme(): void {
+    if (this.closed) return;
+    if (this.raw) {
+      // Recolor the open session at once (or restore the terminal's colors).
+      const colors = this.sessionColors();
+      if (colors) this.emit(colors);
+      return;
+    }
+    this.draw();
+  }
+
+  private paintTheme(): PaintTheme {
+    const state = this.host.theme?.();
+    if (!state) return DEFAULT_THEME;
+    return { palette: paletteFor(resolveThemeKind(state.choice, state.editorKind)), depth: state.depth };
   }
 
   private onShellChunk(chunk: string): void {
@@ -1070,10 +1273,28 @@ export class EasySshApp {
     this.tabEpoch += 1;
     this.inputLine.reset();
     this.plainClick = this.host.plainClick?.() ?? false;
-    const dim = '\x1b[38;2;106;106;106m';
-    const hint = sessionHint(this.host.clickLabel?.() ?? (this.plainClick ? 'Click' : 'Ctrl+click'), this.host.showActionMenu !== undefined);
+    const theme = this.paintTheme();
+    const dim = `\x1b[${colorCode(theme.palette.fg.muted, theme.depth, 'fg')}m`;
+    const hint = sessionHint(this.host.clickLabel?.() ?? (this.plainClick ? 'Click' : 'Ctrl+click'), this.host.showActionMenu !== undefined, theme);
     const lines = [...notes.map((note) => `${dim}${note}\x1b[0m`), hint.styled].join('\r\n');
-    this.present(`\x1b[?1049l\x1b[?25h\x1b[0m\x1b[2J\x1b[3J\x1b[H${lines}\r\n${this.plainClick ? MOUSE_ON : ''}`);
+    const cursorReset = this.menuCursor ? '\x1b]112\x07' : '';
+    this.menuCursor = undefined;
+    this.present(`\x1b[?1049l${cursorReset}${this.sessionColors()}\x1b[?25h\x1b[0m\x1b[2J\x1b[3J\x1b[H${lines}\r\n${this.plainClick ? MOUSE_ON : ''}`);
+  }
+
+  /**
+   * The Easy SSH palette for the connected shell (easySsh.themeSession), as OSC
+   * color sequences for this terminal only; or the reset when it was on before.
+   */
+  private sessionColors(): string {
+    const state = this.host.theme?.();
+    if (!state?.session) {
+      const reset = this.sessionPainted ? SESSION_COLOR_RESET : '';
+      this.sessionPainted = false;
+      return reset;
+    }
+    this.sessionPainted = true;
+    return sessionColorSequence(sessionColorsFor(resolveThemeKind(state.choice, state.editorKind)));
   }
 
   /** Show bytes in the terminal and keep a copy for click hit-testing. */
@@ -1093,6 +1314,10 @@ export class EasySshApp {
     this.raw = false;
     this.remoteAlt = false;
     this.remotePaste = false;
+    if (this.sessionPainted) {
+      this.sessionPainted = false;
+      this.emit(SESSION_COLOR_RESET);
+    }
     this.emit('\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?2004h\x1b[?1049h\x1b[0m');
   }
 
@@ -1335,9 +1560,18 @@ export class EasySshApp {
   private async showConnections(notice?: Notice): Promise<void> {
     const records = await this.host.listConnections();
     this.records = new Map(records.map((record) => [record.id, record]));
-    const items = records.map(describe);
+    const used = this.host.lastUsed?.() ?? {};
+    const items = records.map((record) => describe(record, records, used[record.id]));
     let selected = items.findIndex((item) => item.id === this.selectedId);
-    if (selected < 0) selected = 0;
+    if (selected < 0) {
+      // Start on the connection used last, so Enter reconnects it.
+      let best = -1;
+      items.forEach((item, index) => {
+        if (item.lastUsed && (best < 0 || (items[best].lastUsed ?? 0) < item.lastUsed)) best = index;
+      });
+      selected = Math.max(0, best);
+    }
+    this.tipIndex += 1;
     this.screen = { kind: 'connections', items, selected, notice, command: '', pick: 0 };
     this.host.setStatus(undefined);
     this.draw();
@@ -1366,7 +1600,19 @@ export class EasySshApp {
     this.draw();
     this.host.log(`Connecting to ${label}`);
     const started = Date.now();
-    const ui: ConnectUi = {
+    const ui = this.connectUi(abort);
+    let opened: Awaited<ReturnType<AppHost['connect']>> | undefined;
+    try {
+      opened = await this.host.connect(record, { signal: abort.signal, ui });
+    } catch (err) {
+      return this.connectFailed(err, abort);
+    }
+    return this.connected(record, opened, abort, started, restoreDir);
+  }
+
+  /** Password and host key prompts while connecting, shown as Easy SSH screens. */
+  private connectUi(abort: AbortController): ConnectUi {
+    return {
       ask: (request: AskRequest) => new Promise<AskAnswer | undefined>((resolve) => {
         if (this.closed || abort.signal.aborted) {
           resolve(undefined);
@@ -1386,29 +1632,35 @@ export class EasySshApp {
         this.draw();
       }),
     };
-    let opened: Awaited<ReturnType<AppHost['connect']>> | undefined;
-    try {
-      opened = await this.host.connect(record, { signal: abort.signal, ui });
-    } catch (err) {
-      if (this.connectAbort === abort) this.connectAbort = null;
-      this.answerPending();
-      if (this.closed) return;
-      if (abort.signal.aborted || err instanceof TransferCancelled) {
-        await this.showConnections({ tone: 'info', text: 'Cancelled' });
-        return;
-      }
-      if (err instanceof HostKeyDeclined) {
-        await this.showConnections({ tone: 'info', text: `Host key of ${err.host} was not trusted. Not connected` });
-        return;
-      }
-      this.host.log(err instanceof Error ? err.message : String(err));
-      if (this.lostRecord) {
-        await this.connectionLost(humanizeSshError(err), true);
-        return;
-      }
-      await this.showConnections({ tone: 'error', text: humanizeSshError(err) });
+  }
+
+  private async connectFailed(err: unknown, abort: AbortController): Promise<void> {
+    if (this.connectAbort === abort) this.connectAbort = null;
+    this.answerPending();
+    if (this.closed) return;
+    if (abort.signal.aborted || err instanceof TransferCancelled) {
+      await this.showConnections({ tone: 'info', text: 'Cancelled' });
       return;
     }
+    if (err instanceof HostKeyDeclined) {
+      await this.showConnections({ tone: 'info', text: `Host key of ${err.host} was not trusted. Not connected` });
+      return;
+    }
+    this.host.log(err instanceof Error ? err.message : String(err));
+    if (this.lostRecord) {
+      await this.connectionLost(humanizeSshError(err), true);
+      return;
+    }
+    await this.showConnections({ tone: 'error', text: humanizeSshError(err) });
+  }
+
+  private async connected(
+    record: ConnectionRecord,
+    opened: Awaited<ReturnType<AppHost['connect']>>,
+    abort: AbortController,
+    started: number,
+    restoreDir: string | undefined,
+  ): Promise<void> {
     if (this.connectAbort === abort) this.connectAbort = null;
     const session = opened.session;
     if (this.closed || abort.signal.aborted) {
@@ -1419,6 +1671,9 @@ export class EasySshApp {
     this.connectMs = Date.now() - started;
     this.session = session;
     this.connectedRecord = record;
+    // Back on the list, the row just used is the selected one.
+    this.selectedId = record.id;
+    void this.host.markUsed?.(record.id)?.catch((err: unknown) => this.host.log(`Could not store the last-used time: ${String(err)}`));
     this.lostRecord = null;
     this.reconnectTries = 0;
     this.tap = new RawShellTap();
@@ -2178,7 +2433,8 @@ export class EasySshApp {
       this.screen.kind === 'connections' ||
       this.screen.kind === 'wizard' ||
       this.screen.kind === 'confirm' ||
-      this.screen.kind === 'pick'
+      this.screen.kind === 'pick' ||
+      this.screen.kind === 'summary'
     ) {
       this.screen = { ...this.screen, notice: { tone, text } };
       this.draw();
@@ -2187,14 +2443,24 @@ export class EasySshApp {
 
   private draw(): void {
     if (this.raw) return;
+    const theme = this.paintTheme();
+    // The text cursor in the prompt and the wizard fields follows the palette too.
+    // OSC 12 changes this terminal only; enterRaw resets it before the shell.
+    const cursor = oscColor(theme.palette.fg.accent);
+    const cursorColor = cursor !== this.menuCursor ? `\x1b]12;${cursor}\x07` : '';
+    this.menuCursor = cursor;
     const frame = render(this.screen, {
       cols: this.cols,
       rows: this.rows,
       downloadFolder: this.host.downloadFolder(),
       home: this.host.home(),
+      theme,
+      now: Date.now(),
+      tip: this.tipIndex,
+      click: this.host.clickLabel?.() ?? 'Click',
     });
     this.links = frame.links;
-    this.emit(paint(frame));
+    this.emit(cursorColor + paint(frame));
   }
 }
 

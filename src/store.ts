@@ -13,6 +13,8 @@ export interface SecretStore {
 
 const CONNECTIONS = 'easySsh.connections';
 const HOST_KEYS = 'easySsh.knownHosts';
+const LAST_USED = 'easySsh.lastUsed';
+const THEME = 'easySsh.theme';
 
 function secretKey(id: string): string {
   return `easySsh.secret.${id}`;
@@ -74,6 +76,36 @@ export class ConnectionStore {
     const next = (await this.list()).filter((item) => item.id !== id);
     await this.state.update(CONNECTIONS, next);
     await this.secrets.delete(secretKey(id));
+    const used = this.lastUsed();
+    if (id in used) {
+      delete used[id];
+      await this.state.update(LAST_USED, used);
+    }
+  }
+
+  /** When each connection last connected (milliseconds since the epoch), by id. */
+  lastUsed(): Record<string, number> {
+    const stored = this.state.get<unknown>(LAST_USED);
+    if (!stored || typeof stored !== 'object') return {};
+    const out: Record<string, number> = {};
+    for (const [id, value] of Object.entries(stored as Record<string, unknown>)) {
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) out[id] = value;
+    }
+    return out;
+  }
+
+  async markUsed(id: string, when = Date.now()): Promise<void> {
+    await this.state.update(LAST_USED, { ...this.lastUsed(), [id]: when });
+  }
+
+  /** The stored /theme choice: auto, dark or light. */
+  theme(): string | undefined {
+    const value = this.state.get<unknown>(THEME);
+    return typeof value === 'string' ? value : undefined;
+  }
+
+  async setTheme(choice: string): Promise<void> {
+    await this.state.update(THEME, choice);
   }
 
   async secret(id: string): Promise<SecretPayload> {

@@ -13,6 +13,7 @@ import type {
 } from '../types';
 import type { ActionMenu, FileAction, TreeCount } from './actions';
 import type { UploadQuestion } from './cwdTracking';
+import type { ColorDepth, ThemeChoice, ThemeKind } from './theme';
 
 export interface FileSession {
   list(dir: string): Promise<BrowseEntry[]>;
@@ -178,4 +179,17 @@ export interface AppHost {
   openRemoteFile?(remotePath: string): Promise<void>;
   /** A modal question with several answers. Undefined when cancelled. */
   choose?(message: string, detail: string, answers: string[]): Promise<string | undefined>;
+  /** When each connection last connected, in milliseconds since the epoch, by id. */
+  lastUsed?(): Record<string, number>;
+  /** Remember a successful connect for the Recent line and the Last used column. */
+  markUsed?(id: string): Promise<void>;
+  /** The Easy SSH palette: the user's choice, VS Code's theme kind, and the color depth. */
+  theme?(): { choice: ThemeChoice; editorKind: ThemeKind; depth: ColorDepth; session?: boolean };
+  /** Store a /theme choice (globalState and the easySsh.theme setting). */
+  setTheme?(choice: ThemeChoice): Promise<void>;
+  /**
+   * Try a connection without saving it: connect, sign in, close. A "keep" secret
+   * uses what is stored for the record's id.
+   */
+  testConnection?(record: ConnectionRecord, secret: SecretUpdate, options: { signal: AbortSignal; ui: ConnectUi }): Promise<{ detail?: string }>;
 }
