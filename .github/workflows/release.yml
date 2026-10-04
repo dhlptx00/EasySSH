@@ -58,7 +58,8 @@ jobs:
           npm test
 
       - name: Package
-        run: npx @vscode/vsce package --no-dependencies --out "${{ steps.meta.outputs.vsix }}"
+        # README links and images point at main on GitHub, so every listing shows the same files.
+        run: npx @vscode/vsce package --no-dependencies --baseContentUrl https://github.com/dhlptx00/EasySSH/blob/main/ --baseImagesUrl https://raw.githubusercontent.com/dhlptx00/EasySSH/main/ --out "${{ steps.meta.outputs.vsix }}"
 
       - name: Publish to Open VSX (skipped when the version is already there)
         env:

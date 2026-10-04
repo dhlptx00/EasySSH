@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { EasySshController } from './controller';
+import { EASYSSH_SCHEME, EasySshFileSystem } from './remoteFsProvider';
 import { EasySshSidebar } from './sidebar';
 import { ConnectionStore } from './store';
 
@@ -25,6 +26,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('easySsh.cancelTransfer', () => controller.cancelTransfer()),
     vscode.window.registerTerminalLinkProvider(controller),
     vscode.window.onDidCloseTerminal((terminal) => controller.onClosed(terminal)),
+    vscode.workspace.registerFileSystemProvider(EASYSSH_SCHEME, new EasySshFileSystem(controller.remoteFiles), { isCaseSensitive: true }),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      if (document.uri.scheme === EASYSSH_SCHEME) controller.remoteFiles.forget(document.uri.authority, document.uri.path);
+    }),
   );
 }
 

@@ -1,6 +1,7 @@
 /**
  * An in-memory SFTP server with just enough of ssh2's SFTPWrapper for the
- * transfer code: handles, positional reads and writes, stat, readdir, rename.
+ * transfer code: handles, positional reads and writes, stat, readdir, rename,
+ * unlink and rmdir.
  * Used by unit tests only.
  */
 type Kind = 'file' | 'dir' | 'link' | 'other';
@@ -11,6 +12,9 @@ interface Node {
   data: Buffer;
   /** Reported size, when it differs from the data (like /proc files). */
   reportSize?: number;
+  /** Seconds since the epoch. */
+  mtime?: number;
+  uid?: number;
 }
 
 interface OpenFile {
@@ -52,6 +56,12 @@ export class FakeSftp {
   readonly truncateAt = new Map<string, number>();
   readonly opened: { path: string; flags: string; mode?: number }[] = [];
   readonly ext_openssh_rename?: (from: string, to: string, cb: (err?: Error) => void) => void;
+  /** When set, writes stamp files with this time (seconds). */
+  clock: number | undefined;
+  /** Owner of files this client creates. */
+  uid = 1000;
+  /** Symlinks that resolve: link path -> target path. stat, open and realpath follow them. */
+  readonly aliases = new Map<string, string>();
 
   constructor(private readonly options: FakeSftpOptions = {}) {
     if (options.posixRename) {
@@ -104,9 +114,9 @@ export class FakeSftp {
     return {
       mode: TYPE_BITS[node.kind] | node.mode,
       size: node.reportSize ?? node.data.length,
-      mtime: 1_700_000_000,
+      mtime: node.mtime ?? 1_700_000_000,
       atime: 1_700_000_000,
-      uid: 1000,
+      uid: node.uid ?? 1000,
       gid: 1000,
       isDirectory: () => node.kind === 'dir',
       isFile: () => node.kind === 'file',
@@ -114,8 +124,12 @@ export class FakeSftp {
     };
   }
 
+  private follow(target: string): string {
+    return this.aliases.get(target) ?? target;
+  }
+
   stat(target: string, cb: (err: Error | undefined, stats?: ReturnType<FakeSftp['attrs']>) => void): void {
-    const node = this.nodes.get(target);
+    const node = this.nodes.get(this.follow(target));
     if (!node) cb(sftpError(2, 'No such file'));
     else cb(undefined, this.attrs(node));
   }
@@ -125,7 +139,7 @@ export class FakeSftp {
   }
 
   realpath(target: string, cb: (err: Error | undefined, path?: string) => void): void {
-    cb(undefined, target === '.' ? '/home/dev' : target);
+    cb(undefined, target === '.' ? '/home/dev' : this.follow(target));
   }
 
   readdir(target: string, cb: (err: Error | undefined, list?: unknown[]) => void): void {
@@ -148,6 +162,7 @@ export class FakeSftp {
 
   open(target: string, flags: string, attrs: { mode?: number }, cb: (err: Error | undefined, handle?: Buffer) => void): void {
     this.opened.push({ path: target, flags, mode: attrs.mode });
+    target = this.follow(target);
     let node = this.nodes.get(target);
     if (flags === 'r') {
       if (!node || node.kind !== 'file') return cb(sftpError(2, 'No such file'));
@@ -156,10 +171,11 @@ export class FakeSftp {
       if (flags === 'wx' && node) return cb(sftpError(4, 'Failure'));
       if (!node && this.options.noCreate?.has(parentOf(target))) return cb(sftpError(3, 'Permission denied'));
       if (!node) {
-        node = { kind: 'file', mode: attrs.mode ?? 0o644, data: Buffer.alloc(0) };
+        node = { kind: 'file', mode: attrs.mode ?? 0o644, data: Buffer.alloc(0), uid: this.uid, mtime: this.clock };
         this.nodes.set(target, node);
       } else {
         node.data = Buffer.alloc(0);
+        if (this.clock !== undefined) node.mtime = this.clock;
       }
     }
     const id = String(this.nextHandle++);
@@ -204,6 +220,7 @@ export class FakeSftp {
       node.data = grown;
     }
     buffer.copy(node.data, position, offset, offset + length);
+    if (this.clock !== undefined) node.mtime = this.clock;
     setImmediate(() => cb());
   }
 
@@ -227,7 +244,20 @@ export class FakeSftp {
   }
 
   unlink(target: string, cb: (err?: Error) => void): void {
-    if (!this.nodes.delete(target)) return cb(sftpError(2, 'No such file'));
+    const node = this.nodes.get(target);
+    if (!node) return cb(sftpError(2, 'No such file'));
+    if (node.kind === 'dir') return cb(sftpError(4, 'Failure'));
+    this.nodes.delete(target);
+    cb();
+  }
+
+  /** Like OpenSSH: only an empty folder can be removed. */
+  rmdir(target: string, cb: (err?: Error) => void): void {
+    const node = this.nodes.get(target);
+    if (!node || node.kind !== 'dir') return cb(sftpError(2, 'No such file'));
+    const prefix = target === '/' ? '/' : `${target}/`;
+    if ([...this.nodes.keys()].some((key) => key.startsWith(prefix))) return cb(sftpError(4, 'Failure'));
+    this.nodes.delete(target);
     cb();
   }
 }

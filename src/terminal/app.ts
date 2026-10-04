@@ -2,11 +2,30 @@ import { randomUUID } from 'crypto';
 import { withParent } from '../entries';
 import type { AskAnswer, AskRequest } from '../ssh/auth';
 import { HostKeyDeclined, TransferCancelled, TransferError, humanizeSshError } from '../ssh/errors';
-import { remoteBasename, remoteJoin } from '../remotePath';
+import { remoteBasename, remoteDirname, remoteJoin } from '../remotePath';
 import { RawShellTap, type RawShellUpdate } from '../ssh/rawShell';
 import type { ConnectUi, HostKeyQuestion } from '../ssh/session';
 import { setupLine, shellQuote, type ShellKind } from '../ssh/shellFeed';
-import { shortenPath } from '../text';
+import {
+  actionMenu,
+  DELETE_COUNT_CAP,
+  DELETE_COUNT_MS,
+  deleteQuestion,
+  onlyActions,
+  renameProblem,
+  renameQuestion,
+  renameSelection,
+  targetSummary,
+  uploadDir,
+  largeOpenQuestion,
+  OPEN_ASK_BYTES,
+  SNIFF_MS,
+  type ActionTarget,
+  type FileAction,
+  type TreeCount,
+} from './actions';
+import { safeFileName, shortenPath } from '../text';
+import { classifyName, looksLikeText, SNIFF_BYTES } from '../fileTypes';
 import type { BrowseEntry, ConflictChoice, ConnectionRecord, Notice, TransferProgress } from '../types';
 import type { AppHost, FileSession, ProgressHandle } from './host';
 import { formatProgress, progressFraction, wantsNotification } from './progress';
@@ -55,7 +74,19 @@ interface TransferJob {
   label: string;
   direction: 'upload' | 'download';
   run: (signal: AbortSignal, progress: (state: TransferProgress) => void) => Promise<void>;
+  /**
+   * Show the progress notification once the job has run this long, even for a
+   * small file. Set for transfers started from the action menu.
+   */
+  notifyAfterMs?: number;
 }
+
+/** A transfer from the action menu shows its notification after this long. */
+const MENU_NOTIFY_MS = 300;
+/** Wait this long after a prompt before listing the folder again. */
+const LISTING_DEBOUNCE_MS = 150;
+/** Folders up to this many names are re-listed after every command; bigger ones when their time changed. */
+const LISTING_ALWAYS_MAX = 2000;
 
 /** Keeps a held answer while a connection waits for the user. */
 interface PendingPrompt {
@@ -109,6 +140,12 @@ export class EasySshApp {
   private plainClick = false;
   private loginUser = '';
   private hostName = '';
+  /** The last connection's name, for messages about its editor tabs after it closed. */
+  private lastTitle: string | undefined;
+  private listingTimer: ReturnType<typeof setTimeout> | undefined;
+  private listingBusy = false;
+  private listingAgain = false;
+  private listedFolder: { path: string; mtime: number } | undefined;
   /** Folder reports from the prompt hook since this connection opened. */
   private cwdReports = 0;
   /** When a command was submitted that the prompt hook has not answered yet. */
@@ -216,10 +253,55 @@ export class EasySshApp {
     void this.enqueue(() => this.openRemote(remotePath));
   }
 
+  /**
+   * A click on a link VS Code offered. VS Code can keep offering a link for a row
+   * whose text has since changed (the pointer stayed on the row while `clear && ls`
+   * redrew it), so check that the row still shows the text the link was made for.
+   * If it changed, act on the name now under the link, or ask for a fresh click.
+   */
+  activateLink(link: Pick<LineLink, 'remotePath' | 'start' | 'length' | 'anchors'>): void {
+    if (this.raw && this.remoteAlt) return;
+    const checked = this.checkLink(link);
+    if (checked.kind === 'stale') {
+      this.host.log(`Ignored a click on ${link.remotePath}: the terminal row changed after the link was made`);
+      this.host.notify?.('info', 'The terminal text under the pointer changed. Move the pointer off the name, then click it again.');
+      return;
+    }
+    if (checked.remotePath !== link.remotePath) this.host.log(`The terminal row changed under the pointer: using ${checked.remotePath} instead of ${link.remotePath}`);
+    this.activatePath(checked.remotePath);
+  }
+
+  private checkLink(link: Pick<LineLink, 'remotePath' | 'start' | 'length' | 'anchors'>): { kind: 'ok'; remotePath: string } | { kind: 'stale' } {
+    const anchors = link.anchors;
+    // No anchor: a wrapped line, or a row scrolled into view from history. Trust it.
+    if (!this.raw || !anchors || anchors.length === 0) return { kind: 'ok', remotePath: link.remotePath };
+    if (anchors.some((anchor) => this.viewport.unchanged(anchor))) return { kind: 'ok', remotePath: link.remotePath };
+    const remote = this.remote;
+    if (anchors.length !== 1 || !remote || !remote.files) return { kind: 'stale' };
+    const now = nameSpans(this.viewport.text(anchors[0].row), remote.entries, this.downloadLabel(), this.host.showActionMenu !== undefined);
+    const end = link.start + link.length;
+    const under = now.filter((span) => span.start < end && link.start < span.start + span.length);
+    return under.length === 1 ? { kind: 'ok', remotePath: under[0].remotePath } : { kind: 'stale' };
+  }
+
+  /** The connection an editor tab reads and saves through, while it is up. */
+  editorSession(): FileSession | null {
+    if (this.closed || !this.session || !this.remote || this.remote.lost || !this.remote.files) return null;
+    return this.session;
+  }
+
+  /** The connection's name, for messages about editor tabs. */
+  connectionLabel(): string {
+    return this.remote?.title ?? this.lastTitle ?? 'the server';
+  }
+
   linkFor(line: string): LineLink[] {
     if (this.raw) {
       if (this.remoteAlt || !this.remote || this.remote.lost || !this.remote.files) return [];
-      return nameSpans(line, this.remote.entries, this.downloadLabel());
+      const spans = nameSpans(line, this.remote.entries, this.downloadLabel(), this.host.showActionMenu !== undefined);
+      if (spans.length === 0) return spans;
+      const anchors = this.viewport.anchor(line);
+      return spans.map((span) => ({ ...span, anchors }));
     }
     const found = this.links.get(line) ?? this.links.get(line.trimEnd());
     if (found) return found;
@@ -262,6 +344,8 @@ export class EasySshApp {
     this.clearRawTimer();
     this.clearStatusTimer();
     this.clearReconnect();
+    if (this.listingTimer) clearTimeout(this.listingTimer);
+    this.listingTimer = undefined;
     this.resetFollow();
     this.connectAbort?.abort();
     this.answerPending();
@@ -813,7 +897,13 @@ export class EasySshApp {
     // The shell reports folders already (a reconnect into a shell with the hook, or the
     // user's own prompt): no need to type the setup line.
     if (update.cwd !== undefined && this.hookPhase === 'waiting') this.finishHook();
-    if (!update.cwd || !this.remote || (update.cwd === this.remote.cwd && !this.remote.lost)) return;
+    if (update.cwd && this.remote && update.cwd === this.remote.cwd && !this.remote.lost) {
+      // Back at the prompt in the same folder: a command may have created, renamed
+      // or deleted names here, so list the folder again (debounced).
+      this.scheduleListingRefresh();
+      return;
+    }
+    if (!update.cwd || !this.remote) return;
     this.remote = { ...this.remote, cwd: update.cwd };
     if (!this.remote.files) return;
     if (!this.transferAbort) this.host.setStatus(`${this.remote.title}:${update.cwd}`);
@@ -981,7 +1071,7 @@ export class EasySshApp {
     this.inputLine.reset();
     this.plainClick = this.host.plainClick?.() ?? false;
     const dim = '\x1b[38;2;106;106;106m';
-    const hint = sessionHint(this.host.clickLabel?.() ?? (this.plainClick ? 'Click' : 'Ctrl+click'));
+    const hint = sessionHint(this.host.clickLabel?.() ?? (this.plainClick ? 'Click' : 'Ctrl+click'), this.host.showActionMenu !== undefined);
     const lines = [...notes.map((note) => `${dim}${note}\x1b[0m`), hint.styled].join('\r\n');
     this.present(`\x1b[?1049l\x1b[?25h\x1b[0m\x1b[2J\x1b[3J\x1b[H${lines}\r\n${this.plainClick ? MOUSE_ON : ''}`);
   }
@@ -1107,7 +1197,7 @@ export class EasySshApp {
     const down = this.pointerDown;
     this.pointerDown = undefined;
     if (!down || down.col !== event.col || down.row !== event.row) return;
-    const link = linkAt(this.viewport.cells(event.row), event.col - 1, this.remote.entries, this.downloadLabel());
+    const link = linkAt(this.viewport.cells(event.row), event.col - 1, this.remote.entries, this.downloadLabel(), this.host.showActionMenu !== undefined);
     if (link) this.activatePath(link.remotePath);
   }
 
@@ -1350,6 +1440,7 @@ export class EasySshApp {
     const notes = [...(opened.notes ?? [])];
     if (opened.usedFallbackPath) notes.push('Remote path was not found. Opened your home directory');
     this.remote = { title: record.name, cwd: opened.cwd, entries, files };
+    this.lastTitle = record.name;
     this.host.setStatus(files ? `${record.name}:${opened.cwd}` : `${record.name} (terminal only)`);
     this.host.setTitle?.(record.name);
     this.enterRaw(notes);
@@ -1458,8 +1549,8 @@ export class EasySshApp {
       if (!this.session) return;
       try {
         const resolved = await this.session.resolve(remotePath, remote.cwd);
-        if (resolved.kind === 'dir') this.download(remoteBasename(remotePath), resolved.path, 'folder');
-        else if (resolved.kind === 'file') this.download(remoteBasename(remotePath), resolved.path, 'file');
+        if (resolved.kind === 'dir') this.clicked({ name: remoteBasename(remotePath), path: resolved.path, kind: 'folder' });
+        else if (resolved.kind === 'file') this.clicked({ name: remoteBasename(remotePath), path: resolved.path, kind: 'file' });
       } catch (err) {
         this.showNotice('error', humanizeSshError(err));
       }
@@ -1468,46 +1559,340 @@ export class EasySshApp {
     await this.openEntry(entry);
   }
 
-  /** A click on a name: files and folders download (a folder with everything in it). */
+  /**
+   * A click on a name opens the action menu. A host without one (tests, older
+   * embedders) downloads directly: files, and folders with everything in them.
+   */
   private async openEntry(entry: BrowseEntry): Promise<void> {
     const remote = this.remote;
     if (!remote || entry.name === '..' || entry.name === '.') return;
     if (entry.kind === 'dir') {
-      this.download(entry.name, entry.path, 'folder');
+      this.clicked({ name: entry.name, path: entry.path, kind: 'folder', mtime: entry.mtime });
       return;
     }
     if (entry.kind === 'file') {
-      this.download(entry.name, entry.path, 'file');
+      this.clicked({ name: entry.name, path: entry.path, kind: 'file', size: entry.size, mtime: entry.mtime });
       return;
     }
     if (!this.session) return;
     try {
-      // A symlink is followed at the top level, like ssh's scp -r would.
+      // A symlink is followed at the top level, like ssh's scp -r would. The
+      // menu then acts on the link's own path, so Rename and Delete change the link.
       const resolved = await this.session.resolve(entry.path, remote.cwd);
-      if (resolved.kind === 'dir') this.download(entry.name, resolved.path, 'folder');
-      else if (resolved.kind === 'file') this.download(entry.name, resolved.path, 'file');
+      if (resolved.kind === 'dir') this.clicked({ name: entry.name, path: entry.path, kind: 'folder', linkTarget: resolved.path });
+      else if (resolved.kind === 'file') this.clicked({ name: entry.name, path: entry.path, kind: 'file', linkTarget: resolved.path });
       else this.showNotice('error', `${entry.name} is not a regular file or folder`);
     } catch (err) {
       this.showNotice('error', humanizeSshError(err));
     }
   }
 
-  /** Queue a download of a file or a whole folder into the download folder. */
-  private download(name: string, remotePath: string, kind: 'file' | 'folder'): void {
+  /** A name was clicked: open the action menu, or download when the host has none. */
+  private clicked(target: ActionTarget): void {
+    if (!this.host.showActionMenu) {
+      this.download(target.name, target.linkTarget ?? target.path, target.kind);
+      return;
+    }
+    // Outside the app queue: the menu and its dialogs wait for the user, and
+    // folder tracking and listings must keep running meanwhile.
+    void this.runActionMenu(target).catch((err: unknown) => {
+      this.host.log(err instanceof Error ? err.stack || err.message : String(err));
+      this.host.notify?.('error', humanizeSshError(err));
+    });
+  }
+
+  /** The menu actions this session supports for a target. */
+  private actionsFor(session: FileSession, target: ActionTarget, text: boolean): Set<FileAction> {
+    const can = new Set<FileAction>(['download']);
+    if (target.kind === 'folder') can.add('upload');
+    if (target.kind === 'file' && text && this.canEdit(session)) can.add('open');
+    if (session.rename && this.host.askRename) can.add('rename');
+    if (session.remove && this.host.confirm) can.add('delete');
+    return can;
+  }
+
+  /** True while the connection an action started on is still the one shown. */
+  private alive(session: FileSession, epoch: number): boolean {
+    return !this.closed && this.session === session && this.browseEpoch === epoch && this.remote !== null;
+  }
+
+  private async runActionMenu(target: ActionTarget): Promise<void> {
+    const host = this.host;
+    const session = this.session;
+    if (!session || !this.remote || !this.remote.files || !host.showActionMenu) return;
+    const epoch = this.browseEpoch;
+    const text = target.kind === 'file' && this.canEdit(session) ? await this.isText(session, target) : false;
+    if (!this.alive(session, epoch)) return;
+    const menu = actionMenu(target, { downloadLabel: this.downloadLabel(), items: target.kind === 'folder' ? 'counting' : undefined });
+    menu.items = onlyActions(menu.items, this.actionsFor(session, target, text));
+    const picked = await host.showActionMenu(menu, this.describeTarget(session, target));
+    if (!picked || !this.alive(session, epoch)) return;
+    this.host.log(`${picked} ${target.path}`);
+    switch (picked) {
+      case 'download':
+        await this.menuDownload(session, epoch, target);
+        return;
+      case 'upload':
+        await this.menuUpload(session, epoch, target);
+        return;
+      case 'open':
+        await this.menuOpen(session, epoch, target);
+        return;
+      case 'rename':
+        await this.menuRename(session, epoch, target);
+        return;
+      case 'delete':
+        await this.menuDelete(session, epoch, target);
+        return;
+      default: {
+        const unreachable: never = picked;
+        return unreachable;
+      }
+    }
+  }
+
+  /** A better menu placeholder once cheap facts are in: a folder's item count, a link's size. */
+  private describeTarget(session: FileSession, target: ActionTarget): Promise<string | undefined> {
+    if (target.kind === 'folder') {
+      return session.list(target.linkTarget ?? target.path)
+        .then((entries) => targetSummary(target, entries.length))
+        .catch(() => targetSummary(target));
+    }
+    if (target.size === undefined && session.stat) {
+      return session.stat(target.linkTarget ?? target.path)
+        .then((found) => {
+          target.size = found.size;
+          target.mtime = found.mtime;
+          return targetSummary(target);
+        })
+        .catch(() => undefined);
+    }
+    return Promise.resolve(undefined);
+  }
+
+  /** Download: a save dialog for a file, a folder picker for a folder. Cancel does nothing. */
+  private async menuDownload(session: FileSession, epoch: number, target: ActionTarget): Promise<void> {
+    const folder = this.host.downloadFolder();
+    const source = target.linkTarget ?? target.path;
+    if (target.kind === 'file') {
+      if (!this.host.pickSaveFile) {
+        this.download(target.name, source, 'file', { menu: true });
+        return;
+      }
+      const local = await this.host.pickSaveFile(folder, safeFileName(target.name));
+      if (!local || !this.alive(session, epoch)) return;
+      this.download(target.name, source, 'file', { exact: local, menu: true });
+      return;
+    }
+    if (!this.host.pickDownloadParent) {
+      this.download(target.name, source, 'folder', { menu: true });
+      return;
+    }
+    const parent = await this.host.pickDownloadParent(folder, target.name);
+    if (!parent || !this.alive(session, epoch)) return;
+    this.download(target.name, source, 'folder', { folder: parent, menu: true });
+  }
+
+  /** Upload into the clicked folder (the menu offers Upload for folders only). */
+  private async menuUpload(session: FileSession, epoch: number, target: ActionTarget): Promise<void> {
+    if (!this.host.pickUploadFiles) return;
+    const dir = uploadDir(target);
+    const paths = await this.host.pickUploadFiles(dir);
+    if (!paths || paths.length === 0 || !this.alive(session, epoch)) return;
+    this.queueUpload(session, paths, dir, { menu: true });
+  }
+
+  /** Open needs an editor host and whole-file SFTP reads and writes. */
+  private canEdit(session: FileSession): boolean {
+    return this.host.openRemoteFile !== undefined && session.readWhole !== undefined && session.writeWhole !== undefined;
+  }
+
+  /**
+   * Whether the menu offers Open: text by name, binary by name, otherwise by the
+   * first bytes (no NUL, valid UTF-8). A sniff that fails or is slow offers Open.
+   */
+  private async isText(session: FileSession, target: ActionTarget): Promise<boolean> {
+    const byName = classifyName(target.name);
+    if (byName !== 'unknown') return byName === 'text';
+    if (target.size === 0 || !session.readHead) return true;
+    const path = target.linkTarget ?? target.path;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), SNIFF_MS);
+    });
+    try {
+      const head = await Promise.race([session.readHead(path, SNIFF_BYTES).catch(() => undefined), late]);
+      if (!head) {
+        this.host.log(`Could not read the start of ${path} in time; offering Open`);
+        return true;
+      }
+      return looksLikeText(head);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /** Open: load the file into a VS Code editor tab. Big files ask first. */
+  private async menuOpen(session: FileSession, epoch: number, target: ActionTarget): Promise<void> {
+    const open = this.host.openRemoteFile;
+    if (!open) return;
+    let size = target.size;
+    if (size === undefined && session.stat) size = await session.stat(target.linkTarget ?? target.path).then((found) => found.size).catch(() => undefined);
+    if (!this.alive(session, epoch)) return;
+    if (size !== undefined && size > OPEN_ASK_BYTES && this.host.choose) {
+      const question = largeOpenQuestion(target, size);
+      const answer = await this.host.choose(question.message, question.detail, ['Open Anyway', 'Download']);
+      if (!answer || !this.alive(session, epoch)) return;
+      if (answer === 'Download') {
+        await this.menuDownload(session, epoch, target);
+        return;
+      }
+    }
+    try {
+      await open.call(this.host, target.path);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.host.log(`Could not open ${target.path}: ${message}`);
+      this.host.notify?.('error', `Could not open ${target.name}. ${message}`);
+    }
+  }
+
+  /** Rename: ask for the new name, confirm, then rename over SFTP. */
+  private async menuRename(session: FileSession, epoch: number, target: ActionTarget): Promise<void> {
+    const rename = session.rename;
+    if (!rename || !this.host.askRename) return;
+    const parent = remoteDirname(target.path);
+    const check = async (value: string): Promise<string | undefined> => {
+      const problem = renameProblem(value, target.name);
+      if (problem) return problem;
+      if (session.exists && (await session.exists(remoteJoin(parent, value)).catch(() => false))) return `"${value}" already exists in ${parent}`;
+      return undefined;
+    };
+    const next = await this.host.askRename({
+      name: target.name,
+      kind: target.kind,
+      parent,
+      selection: renameSelection(target.name, target.kind),
+      validate: check,
+    });
+    if (next === undefined || !this.alive(session, epoch)) return;
+    const problem = await check(next);
+    if (problem) {
+      this.host.notify?.('error', `Not renamed. ${problem}`);
+      return;
+    }
+    const question = renameQuestion(target, next);
+    if (this.host.confirm && !(await this.host.confirm(question.message, question.detail, 'Rename'))) return;
+    if (!this.alive(session, epoch)) return;
+    try {
+      await rename.call(session, target.path, remoteJoin(parent, next));
+    } catch (err) {
+      this.host.log(`Rename of ${target.path} failed: ${humanizeSshError(err)}`);
+      this.host.notify?.('error', `Rename failed. ${humanizeSshError(err)}`);
+      return;
+    }
+    this.host.log(`Renamed ${target.path} to ${remoteJoin(parent, next)}`);
+    this.host.notify?.('info', `Renamed "${target.name}" to "${next}"`);
+    void this.enqueue(() => this.refreshCwd());
+  }
+
+  /** Delete: count a folder's files, ask with the count, then delete over SFTP. */
+  private async menuDelete(session: FileSession, epoch: number, target: ActionTarget): Promise<void> {
+    const remove = session.remove;
+    // Never delete without a confirmation.
+    if (!remove || !this.host.confirm) return;
+    let count: TreeCount | undefined;
+    if (target.kind === 'folder' && !target.linkTarget && session.countTree) {
+      this.host.setStatus(`Counting files in ${target.name}…`);
+      count = await session.countTree(target.path, { cap: DELETE_COUNT_CAP, timeoutMs: DELETE_COUNT_MS }).catch((err: unknown) => {
+        this.host.log(`Could not count ${target.path}: ${humanizeSshError(err)}`);
+        return undefined;
+      });
+      this.restoreStatus();
+    }
+    if (!this.alive(session, epoch)) return;
+    const question = deleteQuestion(target, count);
+    if (!(await this.host.confirm(question.message, question.detail, 'Delete'))) return;
+    if (!this.alive(session, epoch)) return;
+    const abort = new AbortController();
+    const total = count && !count.capped ? count.files + count.folders + 1 : undefined;
+    let progress: ProgressHandle | undefined;
+    let done = 0;
+    let reported = 0;
+    const report = () => {
+      reported = Date.now();
+      progress?.report(total ? `${done} of ${total} items` : `${done} items`, total ? Math.min(1, done / total) : undefined);
+    };
+    const timer = target.kind === 'folder' && !target.linkTarget
+      ? setTimeout(() => {
+        progress = this.host.showProgress?.(`Easy SSH: deleting ${target.name}/`, () => abort.abort());
+        report();
+      }, MENU_NOTIFY_MS)
+      : undefined;
+    const what = target.linkTarget ? 'link' : target.kind;
+    try {
+      const result = await remove.call(session, target.path, {
+        signal: abort.signal,
+        onProgress: (items) => {
+          done = items;
+          if (Date.now() - reported >= 100) report();
+        },
+      });
+      const inside = target.kind === 'folder' && !target.linkTarget
+        ? ` (${result.files} file${result.files === 1 ? '' : 's'}, ${Math.max(0, result.folders - 1)} subfolder${result.folders === 2 ? '' : 's'})`
+        : '';
+      this.host.log(`Deleted ${target.path}${inside}`);
+      this.host.notify?.('info', `Deleted ${what} "${target.name}"${inside}`);
+    } catch (err) {
+      if (abort.signal.aborted || err instanceof TransferCancelled) {
+        this.host.log(`Stopped deleting ${target.path} after ${done} items`);
+        this.host.notify?.('info', `Stopped deleting "${target.name}" after ${done} items. Those are gone; the rest is still there.`);
+      } else {
+        this.host.log(`Delete of ${target.path} failed after ${done} items: ${humanizeSshError(err)}`);
+        this.host.notify?.('error', `Delete failed${done ? ` after ${done} items` : ''}. ${humanizeSshError(err)}`);
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+      progress?.close();
+    }
+    void this.enqueue(() => this.refreshCwd());
+  }
+
+  /** The status bar shows the connection and folder again. */
+  private restoreStatus(): void {
+    if (this.closed || !this.remote || this.transferAbort) return;
+    this.host.setStatus(this.remote.files ? `${this.remote.title}:${this.remote.cwd}` : `${this.remote.title} (terminal only)`);
+  }
+
+  /**
+   * Queue a download of a file or a whole folder. By default it goes into the
+   * download folder under a free name; the action menu passes the folder (or the
+   * exact file path) the user picked.
+   */
+  private download(
+    name: string,
+    remotePath: string,
+    kind: 'file' | 'folder',
+    where: { folder?: string; exact?: string; menu?: boolean } = {},
+  ): void {
     const session = this.session;
     if (!session || !this.remote) return;
-    const folder = this.host.downloadFolder();
+    const folder = where.folder ?? this.host.downloadFolder();
     const settings = this.transferSettings();
     this.enqueueTransfer({
       label: kind === 'folder' ? `${name}/` : name,
       direction: 'download',
+      notifyAfterMs: where.menu ? MENU_NOTIFY_MS : undefined,
       run: async (signal, onProgress) => {
         const options = { signal, concurrency: settings.concurrency, onProgress };
         if (kind === 'file') {
-          const result = await session.download(remotePath, folder, name, options);
+          const result = where.exact && session.downloadTo
+            ? await session.downloadTo(remotePath, where.exact, options)
+            : await session.download(remotePath, folder, name, options);
           const grew = result.grew ? ' (it grew while downloading)' : '';
           this.host.log(`Downloaded ${remotePath} to ${result.localPath}${grew}`);
           this.finishTransfer(`Downloaded to ${result.localPath}`);
+          if (where.menu) this.host.notify?.('info', `Downloaded ${name} to ${result.localPath}${grew}`);
           return;
         }
         const result = await session.downloadFolder(remotePath, folder, name, { ...options, maxFiles: settings.maxFiles });
@@ -1519,7 +1904,7 @@ export class EasySshApp {
         if (result.skipped.length > 0) {
           const kinds = [...new Set(result.skipped.map((item) => item.reason))].join(', ');
           this.host.notify?.('info', `${text} (${kinds}). The list is in the Easy SSH log.`);
-        }
+        } else if (where.menu) this.host.notify?.('info', text);
       },
     });
   }
@@ -1548,11 +1933,24 @@ export class EasySshApp {
       cwd = picked;
       asUser = ` as ${this.loginUser}`;
     }
-    const target = cwd;
+    this.queueUpload(session, paths, cwd, { stale, asUser });
+  }
+
+  /** Queue an upload of local paths into the remote folder target. */
+  private queueUpload(
+    session: FileSession,
+    paths: string[],
+    target: string,
+    context: { stale?: StaleCwd; asUser?: string; menu?: boolean } = {},
+  ): void {
+    const { stale, menu } = context;
+    const asUser = context.asUser ?? '';
+    const names = paths.map((item) => item.split(/[/\\]/).filter(Boolean).pop() || item);
     const settings = this.transferSettings();
     this.enqueueTransfer({
       label: paths.length === 1 ? names[0] : `${paths.length} items`,
       direction: 'upload',
+      notifyAfterMs: menu ? MENU_NOTIFY_MS : undefined,
       run: async (signal, onProgress) => {
         try {
           const result = await session.upload(paths, target, {
@@ -1577,8 +1975,8 @@ export class EasySshApp {
               ? ` To move it, run sudo mv ${shellQuote(remoteJoin(target, names[0]))} <folder> in the terminal.`
               : '';
             this.host.notify?.('info', `${text}.${move}`);
-          }
-          void this.enqueue(() => this.refreshAfterUpload());
+          } else if (menu) this.host.notify?.('info', text);
+          void this.enqueue(() => this.refreshCwd('the upload'));
         } catch (err) {
           if (err instanceof TransferError && err.remotePermissionDenied) {
             throw new TransferError(err.action, err.target, err.side, new Error(`${err.reason} (SFTP user ${this.loginUser})`));
@@ -1628,7 +2026,8 @@ export class EasySshApp {
         last = state;
         const text = formatProgress(state, Date.now() - started, this.transferQueue.length);
         this.host.setStatus(`${job.label}: ${text}`);
-        if (!shown && wantsNotification(state) && this.host.showProgress) {
+        const late = job.notifyAfterMs !== undefined && Date.now() - started >= job.notifyAfterMs;
+        if (!shown && (wantsNotification(state) || late) && this.host.showProgress) {
           shown = true;
           this.progress = this.host.showProgress(`Easy SSH: ${job.label}`, () => abort.abort());
         }
@@ -1667,6 +2066,52 @@ export class EasySshApp {
     this.progress = undefined;
   }
 
+  /** List the shell's folder again soon; several prompts in a row make one listing. */
+  private scheduleListingRefresh(): void {
+    if (!this.remote || !this.remote.files || this.closed) return;
+    if (this.listingTimer) clearTimeout(this.listingTimer);
+    this.listingTimer = setTimeout(() => {
+      this.listingTimer = undefined;
+      void this.refreshSameFolder();
+    }, LISTING_DEBOUNCE_MS);
+  }
+
+  /**
+   * Re-list the current folder after a command, so names it created become
+   * clickable. A big folder is only re-listed when its modification time changed.
+   */
+  private async refreshSameFolder(): Promise<void> {
+    if (this.listingBusy) {
+      this.listingAgain = true;
+      return;
+    }
+    const session = this.session;
+    const remote = this.remote;
+    if (!session || !remote || !remote.files || remote.lost || this.closed) return;
+    const cwd = remote.cwd;
+    const epoch = this.browseEpoch;
+    this.listingBusy = true;
+    try {
+      let folderTime: number | undefined;
+      if (remote.entries.length > LISTING_ALWAYS_MAX && session.stat) {
+        folderTime = await session.stat(cwd).then((found) => found.mtime).catch(() => undefined);
+        if (folderTime !== undefined && this.listedFolder?.path === cwd && this.listedFolder.mtime === folderTime) return;
+      }
+      const entries = withParent(cwd, await session.list(cwd));
+      if (epoch !== this.browseEpoch || this.session !== session || !this.remote || this.remote.cwd !== cwd) return;
+      this.remote = { ...this.remote, entries };
+      this.listedFolder = folderTime === undefined ? undefined : { path: cwd, mtime: folderTime };
+    } catch {
+      // The folder may have become unreadable. Keep the previous list.
+    } finally {
+      this.listingBusy = false;
+      if (this.listingAgain) {
+        this.listingAgain = false;
+        this.scheduleListingRefresh();
+      }
+    }
+  }
+
   private async refreshListing(cwd: string): Promise<void> {
     if (!this.session || !this.remote || !this.remote.files) return;
     const epoch = this.browseEpoch;
@@ -1680,7 +2125,8 @@ export class EasySshApp {
     }
   }
 
-  private async refreshAfterUpload(): Promise<void> {
+  /** List the shell's folder again, e.g. after an upload, rename, or delete changed it. */
+  private async refreshCwd(after = 'the change'): Promise<void> {
     if (!this.session || !this.remote || !this.remote.files) return;
     const epoch = this.browseEpoch;
     const cwd = this.remote.cwd;
@@ -1689,7 +2135,7 @@ export class EasySshApp {
       if (epoch !== this.browseEpoch || !this.remote) return;
       this.remote = { ...this.remote, entries };
     } catch (err) {
-      this.host.log(`Could not list ${cwd} after the upload: ${humanizeSshError(err)}`);
+      this.host.log(`Could not list ${cwd} after ${after}: ${humanizeSshError(err)}`);
     }
   }
 

@@ -5,15 +5,15 @@
 [![CI](https://github.com/dhlptx00/EasySSH/actions/workflows/ci.yml/badge.svg)](https://github.com/dhlptx00/EasySSH/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-An SSH client in a VS Code or Cursor terminal tab. Save your hosts, hop through jump hosts, import `~/.ssh/config`, Ctrl+click a file or folder name to download it, and drag files onto the terminal to upload them.
+An SSH client in a VS Code or Cursor terminal tab. Save your hosts, hop through jump hosts, import `~/.ssh/config`, Ctrl+click a file or folder name to download, open, rename or delete it, and drag files onto the terminal to upload them.
 
 Easy SSH talks SSH directly from your editor. **Nothing is installed on the server**, and no remote editor server is downloaded, so it works on old, small, and locked-down machines where Remote-SSH can't run.
 
-![Easy SSH overview: saved connections, sign-in options, jump hosts, a real login shell, Ctrl+click or Cmd+click to download a file or folder, and drop to upload](media/readme/infographic.png)
+![Easy SSH overview: saved connections, sign-in options, jump hosts, a real login shell, a Ctrl+click or Cmd+click menu to download, open, rename or delete a file or folder, editing a remote file in a VS Code tab, and drop to upload](media/readme/infographic-0.3.0.png)
 
-![Demo: pick a connection, open the remote shell, Ctrl+click a folder to download it with progress, and Ctrl+click a file to download it](media/readme/connect-and-download.gif)
+![Demo: pick a connection, open the remote shell, Ctrl+click a folder and download it with progress, then Ctrl+click config.yaml, open it in an editor tab, change a value and save it back to the server](media/readme/connect-menu-open.gif)
 
-*Quick demo: connect, Ctrl+click a folder to download it, then Ctrl+click a file. On macOS, use Cmd+click.*
+*Quick demo: connect, Ctrl+click a folder and download it, then Ctrl+click a file, open it in an editor tab and save it back with Ctrl+S. On macOS, use Cmd+click and Cmd+S.*
 
 ## Install
 
@@ -28,9 +28,11 @@ Easy SSH talks SSH directly from your editor. **Nothing is installed on the serv
 - Hop through one or more jump hosts
 - Import hosts from `~/.ssh/config`, including `Host *` defaults and `ProxyJump` chains
 - Open your remote login shell (bash, zsh, fish and others) and use it exactly as over `ssh`, including `vim`, `top` and `sudo`
-- **Download a file:** Ctrl+click its name (Cmd+click on macOS)
-- **Download a folder** with everything in it: Ctrl+click its name (Cmd+click on macOS)
-- **Upload:** drag files or folders onto the terminal. They go into the current remote folder
+- **Ctrl+click a file or folder name** (Cmd+click on macOS) for its action menu. Files: **Download**, **Open**, **Rename**, **Delete**. Folders: **Download**, **Upload**, **Rename**, **Delete**
+- **Open a remote text file in a VS Code editor tab** and save it back to the server with Ctrl+S (Cmd+S). Permissions are kept, and saving warns you if the file changed on the server in the meantime
+- **Download a folder** with everything in it, the same way
+- **Upload:** drag files or folders onto the terminal, as before. They go into the current remote folder
+- Names you create with commands (`touch`, `mv`, `tar`, …) can be clicked right away, without a `cd`
 - Follow big transfers in a progress notification with **Cancel**
 - Reconnect after a dropped connection, back into the same folder
 - Open several sessions, each in its own terminal tab named after the server
@@ -91,34 +93,71 @@ A connection opens your login shell in the home folder (or in the connection's s
 
 *A remote login shell, the same as over `ssh`.*
 
+### Ctrl+click a name: the action menu
+
+Ctrl+click a file or folder name in the remote shell (Cmd+click on macOS) to open a menu of what you can do with it. Its title shows the name and the folder it's in, for example `access.log — /home/deploy/logs`, and its placeholder the size or the number of items. **Download** is first, so Enter downloads.
+
+| A folder | A text file |
+| --- | --- |
+| ![The action menu for the folder logs: Download, Upload, Rename, Delete](media/readme/08-folder-action-menu.png) | ![The action menu for the text file access.log: Download, Open, Rename, Delete](media/readme/09-file-action-menu.png) |
+| Download, Upload, Rename, Delete | Download, Open, Rename, Delete |
+
+| Action | Files | Folders | What it does |
+| --- | --- | --- | --- |
+| Download | ✓ | ✓ | Opens a save dialog (for a folder: a folder picker), starting in your download folder, then downloads with a progress notification and **Cancel** |
+| Upload… | | ✓ | Opens a file picker titled with the target, e.g. `Upload to /home/demo/project/logs`, and uploads into the clicked folder with a progress notification. Existing names ask first. To upload into the current folder, drop files on the terminal as before |
+| Open | text | | Opens the file in a VS Code editor tab. **Ctrl+S** (Cmd+S) saves it straight back to the server, keeping its permissions. Files over 5 MB ask first: **Open Anyway**, **Download** or Cancel |
+| Rename… | ✓ | ✓ | Asks for the new name (the part before the extension is selected), checks it isn't taken, asks once more, then renames over SFTP |
+| Delete… | ✓ | ✓ | Asks first. For a folder the question counts its files, e.g. `Delete folder "logs" and its 128 files?` (`5000+ files` for very big ones). A folder is deleted with everything in it |
+
+**Open** is offered for text files only, so the menu for an archive, image or program is Download, Rename, Delete:
+
+![The action menu for the archive access-2026-09-29.log.gz: Download, Rename, Delete, without Open](media/readme/19-binary-file-action-menu.png)
+
+Easy SSH decides by the name first (`.txt`, `.json`, `.yaml`, `.log`, `.conf`, `.sh`, `.py`, `Dockerfile`, `.bashrc`, `authorized_keys` and many more are text; `.zip`, `.tar.gz`, `.png`, `.pdf`, `.so`, `.exe` and the like are not). For any other name it reads the first 8 KB over SFTP: no NUL bytes and valid UTF-8 means text. If that read fails or takes too long, Open is offered.
+
+For a symbolic link, Rename and Delete change the link itself, not what it points to.
+
+Cancelling a dialog does nothing. Every rename and delete runs over SFTP as the user you signed in as.
+
+### Open and edit a remote file
+
+Ctrl+click a text file name and choose **Open**. The file opens in a normal VS Code editor tab, with syntax highlighting, search and everything else the editor has. Press **Ctrl+S** (Cmd+S on macOS) to save it straight back to the server.
+
+![config.yaml opened from the terminal in an editor tab; after Ctrl+S the shell below shows the saved change](media/readme/16-open-in-editor.png)
+
+*`config.yaml` opened from the action menu, changed and saved; `grep` in the shell shows the new value.*
+
+- The tab's address is `easyssh://<connection>/<full path>`. It reads and saves through the terminal's own connection, as the user you signed in as. Nothing is installed on the server.
+- A save writes a temporary file next to the original with the same permissions, then puts it in place. A symbolic link stays a link, and a file owned by another user (or in a folder you can't write to) is rewritten in place so its owner doesn't change.
+- **Big files ask first.** A text file over 5 MB shows its size and asks: **Open Anyway**, **Download** or Cancel. Files over 256 MB aren't opened in the editor; download them instead.
+- **Changed on the server?** If someone else (or a command in your shell) changed the file after you opened it, saving shows both versions' size and time and asks before overwriting. Cancel keeps your edits in the editor.
+- **Disconnected?** While the terminal is disconnected or closed, saving fails with a message that says so, and your changes stay in the editor. Reconnect and save again. A tab still open after VS Code reloads works again once you open a terminal for the same connection.
+
+| Over 5 MB | Changed on the server |
+| --- | --- |
+| ![Opening a 38 MB log asks: Download, Cancel or Open Anyway](media/readme/17-open-large-file.png) | ![Saving config.yaml after it changed on the server asks before overwriting](media/readme/18-save-conflict.png) |
+
 ### Download a folder
 
-Ctrl+click a folder name (Cmd+click on macOS) to download the whole folder, including subfolders. Hovering the name shows **Download folder** and where it goes.
+Ctrl+click a folder name (Cmd+click on macOS) and choose **Download** to download the whole folder, including subfolders. Pick the folder it goes into; your download folder is preselected.
 
 - The folder keeps its structure and permission bits.
 - If a folder with that name already exists locally, the download is named `logs (1)`.
 - Symbolic links and special files are skipped. Easy SSH lists them when the download finishes.
 - The download is written into a hidden temporary folder and renamed when it's complete. A cancelled or failed download leaves nothing behind.
 
-![Hovering a folder name shows "Download folder logs to ~/Downloads (ctrl + click)"](media/readme/08-click-folder-to-download.png)
-
-*Ctrl+click a folder name (Cmd+click on macOS) to download it with everything in it.*
-
-Big downloads and uploads, and any folder, show a notification with the size, speed, time left, file count and a **Cancel** button. If you start another transfer in the same terminal, it waits in a queue.
+Big downloads and uploads, any folder, and every transfer from the action menu that takes longer than a moment show a notification with the size, speed, time left, file count and a **Cancel** button. If you start another transfer in the same terminal, it waits in a queue.
 
 ![A progress notification for a folder download, with speed, time left and Cancel](media/readme/14-transfer-progress.png)
 
 ### Download a file
 
-Ctrl+click a file name (Cmd+click on macOS). The status bar shows where it was saved. If the name is taken, Easy SSH adds a number, such as `notes (1).txt`.
-
-![Hovering a file name shows "Download access.log to ~/Downloads (ctrl + click)"; the status bar shows where the file was saved](media/readme/09-click-file-to-download.png)
-
-*Ctrl+click a file name (Cmd+click on macOS) to download it.*
+Ctrl+click a file name (Cmd+click on macOS) and choose **Download**. The save dialog starts in your download folder with the file's name; if you pick an existing file, the dialog asks before replacing it. When the download finishes, a message says where it was saved.
 
 ### Upload
 
-Drag files or folders from your computer onto the Easy SSH terminal. They're written into the current remote folder of the terminal you drop them on. In a split view, a drop goes to the pane under the mouse.
+Drag files or folders from your computer onto the Easy SSH terminal, as before. They're written into the current remote folder of the terminal you drop them on. In a split view, a drop goes to the pane under the mouse. You can also Ctrl+click a folder name and choose **Upload…** to pick files (on macOS, files or folders) to put into that folder.
 
 - A folder is uploaded with its contents, keeping its permission bits. Symbolic links inside it are skipped.
 - If something with the same name already exists, Easy SSH asks first: **Replace**, **Keep Both** (uploads as `name (1)`), or **Skip**.
@@ -129,6 +168,12 @@ Drag files or folders from your computer onto the Easy SSH terminal. They're wri
 | ![Dragging files from the desktop onto the Easy SSH terminal](media/readme/10-upload-drag-onto-terminal.png) | ![The uploaded file in the current remote directory](media/readme/11-upload-complete.png) |
 
 A path you **paste** is typed, never uploaded, when it matches what's on your clipboard. Inside full-screen programs such as `vim`, a dropped path is always typed. A drop from outside your home folder asks before it uploads.
+
+### Names stay current
+
+Every name the remote folder holds is a link, also right after a command creates or renames it: after each command the terminal lists the folder again (once, shortly after the prompt returns; very big folders only when they changed). So `touch notes.md`, `mv a b` or `tar xf release.tgz` give you clickable names without a `cd`.
+
+VS Code can keep a link under a pointer that hasn't moved while the text below it changes, for example after `clear && ls`. Easy SSH checks the row when you click: if a different name is there now, the menu is for that name; if it can't tell, it asks you to move the pointer off the name and click again.
 
 ### When the connection drops
 
@@ -141,8 +186,10 @@ Easy SSH sends a keepalive every 15 seconds. If the server stops answering, or t
 | Action | Result |
 | --- | --- |
 | Type, arrows, Tab, Ctrl+R, Ctrl+L | The remote shell handles the keys. Tab finishes a path such as `cd /tm` |
-| Ctrl+click a file name (Cmd+click on macOS) | Download the file |
-| Ctrl+click a folder name (Cmd+click on macOS) | Download the folder with everything in it |
+| Ctrl+click a file name (Cmd+click on macOS) | Action menu: Download, Open (text files), Rename, Delete |
+| Ctrl+S (Cmd+S) in an opened file | Save it back to the server |
+| Ctrl+click a folder name (Cmd+click on macOS) | Action menu: Download (with everything in it), Upload, Rename, Delete |
+| Enter in the action menu | Download |
 | Drag with the mouse | Select text |
 | Drag files or folders onto the terminal | Upload into the current remote folder |
 | Ctrl+C | Stop the running remote command. It never cancels a transfer |
@@ -151,7 +198,7 @@ Easy SSH sends a keepalive every 15 seconds. If the server stops answering, or t
 | Paste | Keep line breaks, including a heredoc |
 | `exit` | Disconnect and go back to the connection list |
 
-If `editor.multiCursorModifier` is set to `ctrlCmd`, names open with Alt+click instead, like other VS Code terminal links. With **Easy SSH: Plain Click** (`easySsh.plainClick`) a plain click downloads, and selecting text needs Shift+drag. On macOS, turn on `terminal.integrated.macOptionClickForcesSelection` and use Option+drag.
+If `editor.multiCursorModifier` is set to `ctrlCmd`, names open with Alt+click instead, like other VS Code terminal links. With **Easy SSH: Plain Click** (`easySsh.plainClick`) a plain click opens the action menu, and selecting text needs Shift+drag. On macOS, turn on `terminal.integrated.macOptionClickForcesSelection` and use Option+drag.
 
 ## Downloads
 
@@ -191,7 +238,7 @@ With SSH agent sign-in, Easy SSH tries the agent first, then `~/.ssh/id_ed25519`
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `easySsh.downloadFolder` | *(Downloads)* | Where downloads go |
-| `easySsh.plainClick` | `false` | Download with a plain click instead of Ctrl/Cmd+click |
+| `easySsh.plainClick` | `false` | Open the action menu with a plain click instead of Ctrl/Cmd+click |
 | `easySsh.hostKeyPolicy` | `ask` | `ask` shows a new server's fingerprint; `trustFirst` trusts it on first connect |
 | `easySsh.knownHostsWriteBack` | `false` | Also add accepted keys to `~/.ssh/known_hosts` |
 | `easySsh.transferConcurrency` | `32` | SFTP requests in flight per file (1–64) |
@@ -212,9 +259,9 @@ With SSH agent sign-in, Easy SSH tries the agent first, then `~/.ssh/id_ed25519`
 | Works on old, small or locked-down servers | Yes | Often not | Yes | Yes |
 | Works in Cursor and VSCodium | Yes | Microsoft builds only | Yes | Yes |
 | Saved hosts and jump hosts | Yes | Through `~/.ssh/config` | Yes | Through `~/.ssh/config` |
-| Download with Ctrl+click on a name | Files and folders | No | No | No |
+| Ctrl+click a name to download, open, rename or delete | Files and folders | No | No | No |
 | Upload by dropping onto the terminal | Yes | Into the explorer | Into the explorer | No |
-| Edit remote files in the editor | No | Yes | Yes | No |
+| Edit remote files in the editor | One file at a time, from the shell | Yes | Yes | No |
 | Remote language servers, debugging | No | Yes | No | No |
 
 Use Remote-SSH when you want to develop *on* the server. Use Easy SSH when you want a quick, reliable shell with easy file transfer, especially on servers you can't or don't want to install anything on.
@@ -227,7 +274,13 @@ Use Remote-SSH when you want to develop *on* the server. Use Easy SSH when you w
 
 **Where did my download go?** To your Downloads folder, unless you chose another one with `/folder`. The status bar and **Output → Easy SSH** show the full path.
 
-**How do I download a folder?** Ctrl+click its name (Cmd+click on macOS). It downloads with all its files and subfolders.
+**How do I download a folder?** Ctrl+click its name (Cmd+click on macOS) and choose **Download**. It downloads with all its files and subfolders.
+
+**How do I delete or rename a remote file?** Ctrl+click its name and choose **Rename…** or **Delete…**. Both ask before they change anything.
+
+**How do I edit a remote file?** Ctrl+click its name and choose **Open**, then save with Ctrl+S (Cmd+S). Open is only offered for text files; for anything else, download it.
+
+**Why is there no Open for this file?** Easy SSH thinks it isn't text: its name says so (an archive, image, program…), or its first 8 KB contain NUL bytes or invalid UTF-8. Download it instead.
 
 **How do I change directory?** Type `cd`, as in any shell. Tab completes remote paths.
 

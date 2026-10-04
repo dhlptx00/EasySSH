@@ -18,7 +18,9 @@ import { setupLine, type ShellKind } from '../../src/ssh/shellFeed';
 import type { AskAnswer, AskRequest } from '../../src/ssh/auth';
 import type { ConflictChoice, ConnectionRecord, SecretPayload, UploadOptions } from '../../src/types';
 import { EasySshApp } from '../../src/terminal/app';
+import type { FileAction } from '../../src/terminal/actions';
 import type { AppHost } from '../../src/terminal/host';
+import { RemoteFiles, type EditorSession, type OverwriteQuestion } from '../../src/remoteFiles';
 
 const PORT = Number(process.env.EASYSSH_IT_PORT ?? 0);
 const HOST = process.env.EASYSSH_IT_HOST ?? '127.0.0.1';
@@ -269,6 +271,202 @@ describe('real sshd', { skip }, () => {
     } finally {
       opened.session.close();
       await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('counts, renames and deletes over SFTP, and downloads to an exact path (action menu)', async () => {
+    const opened = await connect('esit_bash');
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'easyssh-it-'));
+    try {
+      const term = await shell(opened.session);
+      await term.waitFor(/it-bash:~\$ /);
+      const base = `${opened.cwd}/menu-${randomBytes(4).toString('hex')}`;
+      term.write(`mkdir -p ${base}/logs/old ${base}/logs/empty /tmp/menu-keep && echo keep > /tmp/menu-keep/k.txt && echo a > ${base}/logs/a.log && echo b > ${base}/logs/old/b.log && ln -s /tmp/menu-keep ${base}/logs/keep-link && echo hi > ${base}/notes.txt && echo READY-$((2+2))\n`);
+      await term.waitFor('READY-4');
+      assert.deepEqual(await opened.session.countTree(`${base}/logs`, { cap: 100, timeoutMs: 5000 }), { files: 3, folders: 2, capped: false });
+      assert.equal((await opened.session.countTree(`${base}/logs`, { cap: 1, timeoutMs: 5000 })).capped, true);
+
+      const local = path.join(dir, 'picked', 'saved-notes.txt');
+      await fs.promises.mkdir(path.dirname(local));
+      await fs.promises.writeFile(local, 'old');
+      const saved = await opened.session.downloadTo(`${base}/notes.txt`, local, transfer());
+      assert.equal(saved.localPath, local);
+      assert.equal(await fs.promises.readFile(local, 'utf8'), 'hi\n');
+      assert.deepEqual(fs.readdirSync(path.dirname(local)), ['saved-notes.txt']);
+
+      await opened.session.rename(`${base}/notes.txt`, `${base}/todo.txt`);
+      assert.equal((await opened.session.stat(`${base}/todo.txt`)).kind, 'file');
+      assert.equal(await opened.session.exists(`${base}/notes.txt`), false);
+      await assert.rejects(opened.session.rename(`${base}/todo.txt`, `${base}/logs`), /already exists/);
+
+      const removed = await opened.session.remove(`${base}/logs`, { signal: new AbortController().signal });
+      assert.deepEqual(removed, { files: 3, folders: 3 });
+      assert.equal(await opened.session.exists(`${base}/logs`), false);
+      assert.equal(await readRemote(opened.session, '/tmp/menu-keep/k.txt'), 'keep\n', 'a symlink is deleted, not what it points to');
+      await opened.session.remove(`${base}/todo.txt`, { signal: new AbortController().signal });
+      await opened.session.remove(base, { signal: new AbortController().signal });
+      assert.equal(await opened.session.exists(base), false);
+    } finally {
+      opened.session.close();
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('opens, saves and protects a remote file for an editor tab (Open)', async () => {
+    const opened = await connect('esit_bash');
+    const other = await connect('esit_bash');
+    const base = `/tmp/open-${randomBytes(4).toString('hex')}`;
+    try {
+      const term = await shell(opened.session);
+      await term.waitFor(/it-bash:~\$ /);
+      term.write(`mkdir -p ${base}/real && printf 'port=80\\n' > ${base}/app.conf && chmod 640 ${base}/app.conf && printf 'a=1\\n' > ${base}/real/target.conf && chmod 600 ${base}/real/target.conf && ln -s ${base}/real/target.conf ${base}/link.conf && echo READY-$((3+4))\n`);
+      await term.waitFor('READY-7');
+      let connected: SshSession | null = opened.session;
+      const questions: OverwriteQuestion[] = [];
+      let answer = false;
+      const files = new RemoteFiles(
+        (authority) => (authority === 'it' ? { label: 'it-bash', session: () => connected as unknown as EditorSession | null } : undefined),
+        async (question) => {
+          questions.push(question);
+          return answer;
+        },
+      );
+      // Open, edit, save: the bytes round-trip and the mode stays 0640.
+      assert.equal(Buffer.from(await files.read('it', `${base}/app.conf`)).toString(), 'port=80\n');
+      await files.write('it', `${base}/app.conf`, Buffer.from('port=8080\n'), { create: true, overwrite: true });
+      assert.equal(await readRemote(opened.session, `${base}/app.conf`), 'port=8080\n');
+      term.write(`stat -c MODE-%a ${base}/app.conf; ls -a ${base} | grep -c part; echo DONE-$((1+1))\n`);
+      await term.waitFor('DONE-2');
+      assert.match(term.output, /MODE-640/);
+      assert.match(term.output, /\n0\r?\n/, 'no temporary .part file left');
+      // A symlink stays a symlink; the file it points to gets the bytes and keeps 0600.
+      await files.read('it', `${base}/link.conf`);
+      await files.write('it', `${base}/link.conf`, Buffer.from('a=2\n'), { create: true, overwrite: true });
+      term.write(`readlink ${base}/link.conf; stat -c LMODE-%a ${base}/real/target.conf; cat ${base}/real/target.conf; echo DONE-$((2+3))\n`);
+      await term.waitFor('DONE-5');
+      assert.ok(term.output.includes(`${base}/real/target.conf`));
+      assert.match(term.output, /LMODE-600/);
+      assert.match(term.output, /a=2/);
+      // Someone else changes the file: the save asks; No keeps their version.
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      await other.session.writeWhole(`${base}/app.conf`, Buffer.from('port=9090 # ops\n'), { create: true, overwrite: true });
+      await assert.rejects(files.write('it', `${base}/app.conf`, Buffer.from('port=1\n'), { create: true, overwrite: true }), /Not saved: app\.conf changed on it-bash/);
+      assert.equal(questions.length, 1);
+      assert.equal(await readRemote(opened.session, `${base}/app.conf`), 'port=9090 # ops\n');
+      answer = true;
+      await files.write('it', `${base}/app.conf`, Buffer.from('port=1\n'), { create: true, overwrite: true });
+      assert.equal(await readRemote(opened.session, `${base}/app.conf`), 'port=1\n');
+      // A closed connection gives a clear error.
+      connected = null;
+      await assert.rejects(files.read('it', `${base}/app.conf`), /it-bash is disconnected/);
+    } finally {
+      await opened.session.remove(base, { signal: new AbortController().signal }).catch(() => undefined);
+      opened.session.close();
+      other.session.close();
+    }
+  });
+
+  it('offers Open only for text, asks before opening a big file, and links names a command just made', async () => {
+    const user = 'esit_bash';
+    const shown: string[] = [];
+    const status: string[] = [];
+    const notes: string[] = [];
+    const menus: { title: string; actions: string[] }[] = [];
+    const chosen: string[] = [];
+    const openedFiles: string[] = [];
+    let pick: FileAction | undefined;
+    let choice: string | undefined;
+    const record: ConnectionRecord = { id: user, name: user, host: HOST, port: PORT, username: user, auth: 'privateKey', privateKeyPath: KEY, jumps: [] };
+    let session: SshSession | undefined;
+    const host: AppHost = {
+      listConnections: async () => [record],
+      saveConnection: async () => {},
+      deleteConnection: async () => {},
+      secretFlags: async () => ({ password: false, passphrase: false }),
+      importConfig: async () => ({ ok: true, message: '' }),
+      connect: async () => {
+        const opened = await connect(user);
+        session = opened.session;
+        return { session: opened.session, cwd: opened.cwd, usedFallbackPath: false, notes: opened.notes, shell: opened.shell };
+      },
+      downloadFolder: () => os.tmpdir(),
+      home: () => os.homedir(),
+      chooseDownloadFolder: async () => undefined,
+      classifyDrop: () => null,
+      keyExists: () => true,
+      setStatus: (text) => {
+        if (text) status.push(text);
+      },
+      log: () => {},
+      scrollTerminal: () => {},
+      quit: () => {},
+      notify: (_tone, text) => notes.push(text),
+      showActionMenu: async (menu) => {
+        menus.push({ title: menu.title, actions: menu.items.filter((item) => item.action).map((item) => item.action as string) });
+        return pick;
+      },
+      confirm: async () => true,
+      askRename: async () => undefined,
+      openRemoteFile: async (remotePath) => {
+        openedFiles.push(remotePath);
+      },
+      choose: async (message) => {
+        chosen.push(message);
+        return choice;
+      },
+    };
+    const app = new EasySshApp(host, (data) => shown.push(data));
+    app.setSize(120, 30);
+    app.open();
+    const until = async (test: () => boolean, what: string, ms = 10000) => {
+      const deadline = Date.now() + ms;
+      while (!test()) {
+        if (Date.now() > deadline) throw new Error(`timed out: ${what}\n${JSON.stringify(shown.join('').slice(-2000))}\n${notes.join('\n')}`);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    };
+    const type = (line: string) => {
+      for (const ch of `${line}\r`) app.onRawInput(ch);
+    };
+    const folder = `/tmp/menu-open-${randomBytes(4).toString('hex')}`;
+    const menuFor = async (name: string) => {
+      const before = menus.length;
+      app.activatePath(`${folder}/${name}`);
+      await until(() => menus.length > before, `menu for ${name}`);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      return menus[menus.length - 1].actions;
+    };
+    try {
+      await until(() => shown.join('').includes(user), 'connection list');
+      app.onInput([{ type: 'key', key: 'enter' }]);
+      await until(() => status.includes(`${user}:/home/${user}`), 'connected');
+      type(`mkdir -p ${folder} && cd ${folder}`);
+      await until(() => status.at(-1) === `${user}:${folder}`, 'cd tracked');
+      // Made by commands in the same folder, no cd: clickable once the prompt is back.
+      type(`printf 'x\\n' > notes.txt && printf 'FROM debian\\n' > Dockerfile && printf 'plain words\\n' > memo && printf '\\177ELF\\0\\0\\1' > tool && head -c 16 /dev/urandom > backup.tar.gz && head -c 6291456 /dev/zero | tr '\\0' 'a' > big.log && mv memo memo2`);
+      await until(() => app.linkFor('memo2').length === 1 && app.linkFor('big.log').length === 1, 'new names are links without a cd');
+      assert.deepEqual(app.linkFor('memo'), []);
+      assert.deepEqual(await menuFor('notes.txt'), ['download', 'open', 'rename', 'delete']);
+      assert.deepEqual(await menuFor('Dockerfile'), ['download', 'open', 'rename', 'delete']);
+      assert.deepEqual(await menuFor('memo2'), ['download', 'open', 'rename', 'delete'], 'sniffed: text');
+      assert.deepEqual(await menuFor('tool'), ['download', 'rename', 'delete'], 'sniffed: NUL bytes');
+      assert.deepEqual(await menuFor('backup.tar.gz'), ['download', 'rename', 'delete'], 'binary by name');
+      pick = 'open';
+      await menuFor('notes.txt');
+      await until(() => openedFiles.length === 1, 'opened');
+      assert.deepEqual(openedFiles, [`${folder}/notes.txt`]);
+      choice = undefined;
+      await menuFor('big.log');
+      await until(() => chosen.length === 1, 'large file question');
+      assert.equal(chosen[0], '"big.log" is 6 MB. Open it in an editor?');
+      assert.equal(openedFiles.length, 1, 'cancel opens nothing');
+      choice = 'Open Anyway';
+      await menuFor('big.log');
+      await until(() => openedFiles.length === 2, 'opened anyway');
+      assert.equal(openedFiles[1], `${folder}/big.log`);
+    } finally {
+      await session?.remove(folder, { signal: new AbortController().signal }).catch(() => undefined);
+      app.dispose();
     }
   });
 

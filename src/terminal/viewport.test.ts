@@ -46,3 +46,48 @@ describe('click viewport', () => {
     assert.equal(text(view.cells(2)), '');
   });
 });
+
+describe('viewport row anchors (stale link check)', () => {
+  it('a row keeps its anchor while it scrolls and loses it when redrawn', () => {
+    const view = new Viewport(40, 3);
+    view.write('README.md\r\nnotes.txt\r\n');
+    const [anchor] = view.anchor('README.md');
+    assert.deepEqual(anchor && anchor.row, 1);
+    assert.equal(view.unchanged(anchor), true);
+    // Scrolling moves the row (and finally off the top) without changing it.
+    view.write('a\r\nb\r\n');
+    assert.equal(view.unchanged(anchor), true);
+    // clear: the same row now shows other text.
+    view.write('\x1b[H\x1b[2Japp.yaml\r\n');
+    assert.equal(view.text(1), 'app.yaml');
+    const [fresh] = view.anchor('app.yaml');
+    assert.equal(view.unchanged(fresh), true);
+    const again = new Viewport(40, 3);
+    again.write('README.md\r\n');
+    const [first] = again.anchor('README.md');
+    again.write('\x1b[H\x1b[2JREADME.md\r\n');
+    // Identical text redrawn is a new row content: the caller re-reads the row.
+    assert.equal(again.unchanged(first), false);
+    assert.equal(again.text(first.row), 'README.md');
+  });
+
+  it('erasing or overwriting a row changes it; other rows keep their anchors', () => {
+    const view = new Viewport(40, 4);
+    view.write('one\r\ntwo\r\nthree');
+    const one = view.anchor('one')[0];
+    const two = view.anchor('two')[0];
+    view.write('\x1b[2;1H\x1b[2Kzwei');
+    assert.equal(view.unchanged(two), false);
+    assert.equal(view.unchanged(one), true);
+    assert.deepEqual(view.anchor('missing'), []);
+    assert.deepEqual(view.anchor(''), []);
+  });
+
+  it('a full-screen program and back keeps the shell rows', () => {
+    const view = new Viewport(40, 4);
+    view.write('notes.txt\r\n');
+    const anchor = view.anchor('notes.txt')[0];
+    view.write('\x1b[?1049h~\r\n~\x1b[?1049l');
+    assert.equal(view.unchanged(anchor), true);
+  });
+});
