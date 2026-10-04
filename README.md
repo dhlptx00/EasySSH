@@ -1,6 +1,6 @@
 # Easy SSH – SSH Client & SFTP Drag-and-Drop
 
-[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/easy-ssh.easy-ssh?label=VS%20Code%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh)
+[![VS Code Marketplace](https://img.shields.io/badge/VS%20Code%20Marketplace-Easy%20SSH-007ACC)](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh)
 [![Open VSX](https://img.shields.io/open-vsx/v/easy-ssh/easy-ssh?label=Open%20VSX)](https://open-vsx.org/extension/easy-ssh/easy-ssh)
 [![CI](https://github.com/dhlptx00/EasySSH/actions/workflows/ci.yml/badge.svg)](https://github.com/dhlptx00/EasySSH/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
