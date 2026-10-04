@@ -24,7 +24,7 @@ export interface RawShellUpdate {
 const MOUSE_MODES = new Set([9, 1000, 1001, 1002, 1003]);
 
 /** Easy SSH's hook prints "$PWD" as is; anything else is someone else's report. */
-export function ownCwdReport(body: string): string | undefined {
+function ownCwdReport(body: string): string | undefined {
   if (!body.startsWith('/')) return undefined;
   return normalizeCwd(body);
 }

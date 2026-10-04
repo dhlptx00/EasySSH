@@ -125,7 +125,7 @@ interface PendingPrompt {
  * A list row for a record. Jump hosts show by the name of a saved connection to
  * the same host when there is one ("via bastion"), else by host.
  */
-export function describe(record: ConnectionRecord, all: ConnectionRecord[] = [], lastUsed?: number): ConnectionItem {
+function describe(record: ConnectionRecord, all: ConnectionRecord[] = [], lastUsed?: number): ConnectionItem {
   const auth = record.auth === 'privateKey' ? 'key' : record.auth;
   const hopName = (host: string, port: number) =>
     all.find((other) => other.id !== record.id && other.host === host && other.port === port)?.name ??
@@ -2486,7 +2486,7 @@ async function folderCheck(session: FileSession, path: string): Promise<boolean 
 }
 
 /** True when a local path is the home folder or inside it. */
-export function isInside(file: string, home: string): boolean {
+function isInside(file: string, home: string): boolean {
   if (!home) return true;
   const windows = /^[A-Za-z]:|^\\\\/.test(home);
   const clean = (value: string) => {

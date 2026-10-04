@@ -88,14 +88,14 @@ function keyName(file: string): string {
 }
 
 /** True when ssh2 cannot use the key without a passphrase. */
-export function keyNeedsPassphrase(key: Buffer): boolean {
+function keyNeedsPassphrase(key: Buffer): boolean {
   const parsed = utils.parseKey(key);
   if (!(parsed instanceof Error)) return false;
   return /encrypted|passphrase/i.test(parsed.message);
 }
 
 /** Null when the passphrase opens the key; otherwise why it does not. */
-export function keyProblem(key: Buffer, passphrase?: string): string | null {
+function keyProblem(key: Buffer, passphrase?: string): string | null {
   const parsed = utils.parseKey(key, passphrase);
   if (parsed instanceof Error) return parsed.message;
   const first = Array.isArray(parsed) ? parsed[0] : parsed;

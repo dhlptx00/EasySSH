@@ -41,7 +41,7 @@ export interface Palette {
   /** Background inside the Easy SSH boxes. Unset: the terminal's own background. */
   panel?: Rgb;
   /** The background the colors were picked for when there is no panel (VS Code's default). */
-  canvas?: Rgb;
+  canvas: Rgb;
   /** The selected row's full-width tint. Rows keep their colors on it. */
   selection: Rgb;
   /** The tint of a selected destructive choice (Yes, delete). */
@@ -139,13 +139,7 @@ export function paletteFor(kind: ThemeKind): Palette {
  */
 export function paletteOn(kind: ThemeKind, editorKind: ThemeKind): Palette {
   const palette = paletteFor(kind);
-  if (kind === editorKind || palette.panel) return palette;
-  return { ...palette, panel: surfaceOf(palette) };
-}
-
-/** What the palette's colors sit on: its panel, or the terminal background it was picked for. */
-export function surfaceOf(palette: Palette): Rgb {
-  return palette.panel ?? palette.canvas ?? (palette.kind === 'light' ? hex('#FFFFFF') : hex('#1F1F1F'));
+  return kind === editorKind ? palette : { ...palette, panel: palette.canvas };
 }
 
 /** "Auto (Easy SSH Light)", "Easy SSH Dark". */
@@ -212,22 +206,6 @@ export function colorCode(rgb: Rgb, depth: ColorDepth, layer: 'fg' | 'bg'): stri
   const index = to16(rgb);
   const base = layer === 'fg' ? (index < 8 ? 30 : 90) : index < 8 ? 40 : 100;
   return String(base + (index % 8));
-}
-
-// ---- contrast (WCAG 2) ----
-
-function channel(value: number): number {
-  const c = value / 255;
-  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-}
-
-export function luminance(rgb: Rgb): number {
-  return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
-}
-
-export function contrast(a: Rgb, b: Rgb): number {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
 }
 
 /** A color between two others, t in [0, 1]. */

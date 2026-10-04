@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   colorCode,
-  contrast,
   DARK,
   editorThemeKind,
   hex,
@@ -16,12 +15,23 @@ import {
   SESSION_COLOR_RESET,
   sessionColorSequence,
   sessionColorsFor,
-  surfaceOf,
   themeLabel,
   to16,
   to256,
+  type Rgb,
   type Role,
 } from './theme';
+
+/** WCAG 2 contrast ratio between two colors. */
+function contrast(a: Rgb, b: Rgb): number {
+  const channel = (value: number) => {
+    const c = value / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = (rgb: Rgb) => 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
 
 describe('Easy SSH palettes', () => {
   it('follows VS Code in Auto and ignores it in Dark and Light', () => {
@@ -68,13 +78,13 @@ describe('Easy SSH palettes', () => {
     assert.deepEqual(LIGHT.fg.accent, hex('#6D28D9'));
     assert.equal(DARK.panel, undefined, 'no painted panel');
     assert.equal(LIGHT.panel, undefined, 'no painted panel');
-    assert.deepEqual(surfaceOf(DARK), hex('#1F1F1F'));
-    assert.deepEqual(surfaceOf(LIGHT), hex('#FFFFFF'));
+    assert.deepEqual(DARK.canvas, hex('#1F1F1F'));
+    assert.deepEqual(LIGHT.canvas, hex('#FFFFFF'));
   });
 
   for (const palette of [DARK, LIGHT]) {
     it(`${palette.name} is readable on VS Code's terminal background and on the selection tint`, () => {
-      const surface = surfaceOf(palette);
+      const surface = palette.canvas;
       const roles: Role[] = ['text', 'muted', 'accent', 'accent2', 'success', 'warn', 'error', 'info'];
       for (const role of roles) {
         assert.ok(contrast(palette.fg[role], surface) >= 4.5, `${role} on the background`);
@@ -117,7 +127,7 @@ describe('session colors', () => {
   for (const kind of ['dark', 'light'] as const) {
     it(`keeps ${kind} ANSI colors readable on VS Code's terminal background`, () => {
       const colors = sessionColorsFor(kind);
-      const background = surfaceOf(paletteFor(kind));
+      const background = paletteFor(kind).canvas;
       // Red, green, yellow, blue, magenta, cyan and their bright versions, and white/black text.
       for (const index of [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, kind === 'dark' ? 7 : 0]) {
         assert.ok(contrast(colors.ansi[index], background) >= 4.5, `ANSI ${index}`);

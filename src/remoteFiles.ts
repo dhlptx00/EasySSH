@@ -72,7 +72,7 @@ function sftpCode(err: unknown): number | string | undefined {
 }
 
 /** Turn an SFTP or connection error into one an editor understands. */
-export function remoteFileError(err: unknown, label: string, path: string): RemoteFileError {
+function remoteFileError(err: unknown, label: string, path: string): RemoteFileError {
   if (err instanceof RemoteFileError) return err;
   const code = sftpCode(err);
   const name = remoteBasename(path) || path;

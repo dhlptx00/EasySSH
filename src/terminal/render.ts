@@ -84,9 +84,10 @@ interface Row {
   optional?: boolean;
 }
 
-// Read from package.json at build time (esbuild inlines it), so the header never goes stale.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const VERSION: string = (require('../../package.json') as { version: string }).version;
+// The bundle gets the version from esbuild.js (define); unbundled runs (tests) read package.json.
+const VERSION: string =
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  process.env.EASY_SSH_VERSION ?? (require('../../package.json') as { version: string }).version;
 const PROMPT_BLOCK = 3;
 const FRAME_GAP = 1;
 const BADGE_WIDTH = 7;
@@ -721,7 +722,7 @@ export function linkAt(cells: readonly string[], column: number, entries: Browse
 }
 
 /** The tooltip of a linked name: what a click does. */
-export function linkTooltip(entry: BrowseEntry, downloadLabel: string, menu: boolean): string {
+function linkTooltip(entry: BrowseEntry, downloadLabel: string, menu: boolean): string {
   const folder = entry.kind === 'dir';
   if (menu) {
     if (folder) return `Folder ${entry.name}: download, upload into, rename, delete`;

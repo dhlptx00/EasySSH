@@ -3,10 +3,8 @@ import { describe, it } from 'node:test';
 import {
   downloadFolderLabel,
   expandWindowsEnv,
-  parseRegDesktop,
-  parseXdgDesktop,
   parseRegValue,
-  resolveDesktop,
+  parseXdgDir,
   resolveDownloadFolder,
   resolveKnownFolder,
   type FolderProbe,
@@ -35,22 +33,22 @@ const reg = (value: string, type = 'REG_EXPAND_SZ') => `\r\nHKEY_CURRENT_USER\\S
 
 describe('local Desktop folder', () => {
   it('parses reg.exe output and expands %VARS% case-insensitively', () => {
-    assert.equal(parseRegDesktop(reg('%USERPROFILE%\\Desktop')), '%USERPROFILE%\\Desktop');
-    assert.equal(parseRegDesktop('ERROR: The system was unable to find the specified registry key'), undefined);
+    assert.equal(parseRegValue(reg('%USERPROFILE%\\Desktop'), 'Desktop'), '%USERPROFILE%\\Desktop');
+    assert.equal(parseRegValue('ERROR: The system was unable to find the specified registry key', 'Desktop'), undefined);
     assert.equal(expandWindowsEnv('\\\\fs01\\home$\\%username%\\Desktop', env), '\\\\fs01\\home$\\hqxrd\\Desktop');
   });
 
   it('follows domain folder redirection to a network share', async () => {
     const redirected = '\\\\fs01\\home$\\hqxrd\\Desktop';
     const probe = winProbe(new Set([redirected]), { 'User Shell Folders': reg('\\\\fs01\\home$\\%USERNAME%\\Desktop') });
-    assert.equal(await resolveDesktop(probe), redirected);
+    assert.equal(await resolveKnownFolder(probe, 'Desktop'), redirected);
     assert.deepEqual(probe.calls, ['User Shell Folders']);
   });
 
   it('follows OneDrive folder backup', async () => {
     const onedrive = 'C:\\Users\\hqxrd\\OneDrive - LGroup\\Desktop';
     const probe = winProbe(new Set([onedrive, 'C:\\Users\\hqxrd\\Desktop']), { 'User Shell Folders': reg('%OneDrive%\\Desktop') });
-    assert.equal(await resolveDesktop(probe), onedrive);
+    assert.equal(await resolveKnownFolder(probe, 'Desktop'), onedrive);
   });
 
   it('asks PowerShell when reg.exe prints a path it cannot decode', async () => {
@@ -60,24 +58,24 @@ describe('local Desktop folder', () => {
       'Shell Folders': reg('D:\\����', 'REG_SZ'),
       'powershell.exe': `${chinese}\r\n`,
     });
-    assert.equal(await resolveDesktop(probe), chinese);
+    assert.equal(await resolveKnownFolder(probe, 'Desktop'), chinese);
     assert.deepEqual(probe.calls, ['User Shell Folders', 'Shell Folders', 'powershell.exe']);
   });
 
   it('falls back to %USERPROFILE%\\Desktop with Windows separators on any OS', async () => {
     const desktop = 'C:\\Users\\hqxrd\\Desktop';
-    assert.equal(await resolveDesktop(winProbe(new Set([desktop]), {})), desktop);
+    assert.equal(await resolveKnownFolder(winProbe(new Set([desktop]), {}), 'Desktop'), desktop);
     const have = new Set(['C:\\Users\\hqxrd\\Downloads']);
     assert.equal(resolveDownloadFolder(undefined, {}, 'C:\\Users\\hqxrd', (file) => have.has(file)), 'C:\\Users\\hqxrd\\Downloads');
   });
 
   it('returns undefined when there is no Desktop, as on some servers', async () => {
-    assert.equal(await resolveDesktop(winProbe(new Set(), {})), undefined);
+    assert.equal(await resolveKnownFolder(winProbe(new Set(), {}), 'Desktop'), undefined);
   });
 
   it('reads the XDG Desktop on Linux', async () => {
-    assert.equal(parseXdgDesktop('XDG_DESKTOP_DIR="$HOME/桌面"\n', '/home/me'), '/home/me/桌面');
-    assert.equal(parseXdgDesktop('XDG_DESKTOP_DIR="$HOME/"\n', '/home/me'), '/home/me/');
+    assert.equal(parseXdgDir('XDG_DESKTOP_DIR="$HOME/桌面"\n', '/home/me', 'XDG_DESKTOP_DIR'), '/home/me/桌面');
+    assert.equal(parseXdgDir('XDG_DESKTOP_DIR="$HOME/"\n', '/home/me', 'XDG_DESKTOP_DIR'), '/home/me/');
     const probe: FolderProbe = {
       platform: 'linux',
       home: '/home/me',
@@ -86,7 +84,7 @@ describe('local Desktop folder', () => {
       run: async () => undefined,
       readFile: () => 'XDG_DESKTOP_DIR="$HOME/桌面"',
     };
-    assert.equal(await resolveDesktop(probe), '/home/me/桌面');
+    assert.equal(await resolveKnownFolder(probe, 'Desktop'), '/home/me/桌面');
   });
 
   it('picks the download folder and labels it', () => {

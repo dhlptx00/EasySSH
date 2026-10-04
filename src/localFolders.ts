@@ -46,11 +46,6 @@ export function parseRegValue(output: string | undefined, name: string): string 
   return match?.[1];
 }
 
-/** The Desktop value from `reg query ... /v Desktop` output. */
-export function parseRegDesktop(output: string | undefined): string | undefined {
-  return parseRegValue(output, 'Desktop');
-}
-
 /** An XDG user dir from ~/.config/user-dirs.dirs, e.g. "$HOME/桌面". */
 export function parseXdgDir(content: string | undefined, home: string, key: string): string | undefined {
   if (!content) return undefined;
@@ -59,11 +54,6 @@ export function parseXdgDir(content: string | undefined, home: string, key: stri
   const value = match[1].replace(/^\$HOME(?=\/|$)/, home).replace(/^\$\{HOME\}(?=\/|$)/, home);
   if (!value.startsWith('/') || value === home) return undefined;
   return value;
-}
-
-/** XDG_DESKTOP_DIR from ~/.config/user-dirs.dirs, e.g. "$HOME/桌面". */
-export function parseXdgDesktop(content: string | undefined, home: string): string | undefined {
-  return parseXdgDir(content, home, 'XDG_DESKTOP_DIR');
 }
 
 /**
@@ -104,11 +94,6 @@ export async function resolveKnownFolder(probe: FolderProbe, folder: KnownFolder
     if (found && probe.exists(found)) return found;
   }
   return undefined;
-}
-
-/** The user's real Desktop folder (see resolveKnownFolder). */
-export function resolveDesktop(probe: FolderProbe): Promise<string | undefined> {
-  return resolveKnownFolder(probe, 'Desktop');
 }
 
 export function systemProbe(): FolderProbe {
