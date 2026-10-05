@@ -9,7 +9,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   status.command = 'easySsh.open';
   const store = new ConnectionStore(context.globalState, context.secrets);
-  const controller = new EasySshController(store, output, status);
+  // In code-server and other browser windows Easy SSH runs on the server (Workspace), not where the user sits.
+  const local = context.extension.extensionKind !== vscode.ExtensionKind.Workspace;
+  const controller = new EasySshController(store, output, status, local ? process.platform : undefined);
   const sidebar = new EasySshSidebar(controller);
   void controller.init();
 

@@ -4,12 +4,17 @@ All notable changes to Easy SSH. Dates are in UTC+8.
 
 If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh&ssr=false#review-details) or [Open VSX](https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews) helps others find it.
 
-## [Unreleased]
+## [0.4.1] - 2026-10-05
 
 ### Changed
 
-- Installs in more VS Code-based editors: Easy SSH now needs VS Code 1.74 or newer (was 1.85), so editors built on an older VS Code can install it from Open VSX.
+- Installs in more VS Code-based editors: Easy SSH now needs VS Code 1.74 or newer (was 1.85), so editors built on an older VS Code can install it from Open VSX (Windsurf, VSCodium, Trae, Kiro, Antigravity and others).
 - Works in code-server and other browser-based editors. There it runs on the machine that serves the editor, so connections start from that machine and files are downloaded to and uploaded from its disk. Desktop editors still run it on your own computer, also over Remote-SSH.
+
+### Fixed
+
+- After a session ends, the terminal tab gets its name back (Easy SSH, Easy SSH 2, …) instead of keeping "SSH: <connection>". A new terminal no longer reuses the name of one that is still connected.
+- In code-server and other browser windows, the hints say Ctrl/Cmd+click, since the editor can't tell which keyboard the browser's computer uses. Before, they named the server's key.
 
 ## [0.4.0] - 2026-10-05
 
@@ -157,6 +162,7 @@ If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace
 - Open a remote directory, click a file to download it, and drop local files to upload them.
 - Connect with a password, a private key, or an SSH agent, including one or more jump hosts.
 
+[0.4.1]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.1
 [0.4.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.0
 [0.3.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.3.0
 [0.2.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.2.0
