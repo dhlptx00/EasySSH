@@ -24,7 +24,7 @@
     "url": "https://buymeacoffee.com/dhlptx00"
   },
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.74.0"
   },
   "categories": [
     "Other"
@@ -54,10 +54,14 @@
     "termius",
     "mobaxterm",
     "remote-ssh alternative",
-    "cursor"
+    "cursor",
+    "windsurf",
+    "vscodium",
+    "code-server"
   ],
   "extensionKind": [
-    "ui"
+    "ui",
+    "workspace"
   ],
   "activationEvents": [
     "onFileSystem:easyssh"
@@ -279,7 +283,7 @@
     "@eslint/js": "^9.39.5",
     "@types/node": "^22.15.0",
     "@types/ssh2": "^1.15.6",
-    "@types/vscode": "~1.85.0",
+    "@types/vscode": "~1.74.0",
     "@xterm/headless": "^5.5.0",
     "esbuild": "^0.28.2",
     "eslint": "^9.39.5",

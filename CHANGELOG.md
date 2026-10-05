@@ -4,6 +4,13 @@ All notable changes to Easy SSH. Dates are in UTC+8.
 
 If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh&ssr=false#review-details) or [Open VSX](https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews) helps others find it.
 
+## [Unreleased]
+
+### Changed
+
+- Installs in more VS Code-based editors: Easy SSH now needs VS Code 1.74 or newer (was 1.85), so editors built on an older VS Code can install it from Open VSX.
+- Works in code-server and other browser-based editors. There it runs on the machine that serves the editor, so connections start from that machine and files are downloaded to and uploaded from its disk. Desktop editors still run it on your own computer, also over Remote-SSH.
+
 ## [0.4.0] - 2026-10-05
 
 ### Changed
