@@ -5,7 +5,7 @@
 [![CI](https://github.com/dhlptx00/EasySSH/actions/workflows/ci.yml/badge.svg)](https://github.com/dhlptx00/EasySSH/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-An SSH client in a VS Code or Cursor terminal tab. Save your hosts, hop through jump hosts, import `~/.ssh/config`, Ctrl+click a file or folder name to download, open, rename or delete it, and drag files onto the terminal to upload them.
+An SSH client in a terminal tab of VS Code, Cursor and other VS Code-based editors. Save your hosts, hop through jump hosts, import `~/.ssh/config`, Ctrl+click a file or folder name to download, open, rename or delete it, and drag files onto the terminal to upload them.
 
 Easy SSH talks SSH directly from your editor. **Nothing is installed on the server**, and no remote editor server is downloaded, so it works on old, small, and locked-down machines where Remote-SSH can't run.
 
@@ -18,7 +18,7 @@ Easy SSH talks SSH directly from your editor. **Nothing is installed on the serv
 ## Install
 
 - **VS Code:** open the Extensions view, search for **Easy SSH**, or run `ext install easy-ssh.easy-ssh` in Quick Open (Ctrl+P / Cmd+P).
-- **Cursor, VSCodium and other Open VSX editors:** search for **Easy SSH** in the Extensions view ([Open VSX page](https://open-vsx.org/extension/easy-ssh/easy-ssh)).
+- **Cursor, Windsurf, VSCodium, Trae, Kiro, Antigravity, code-server and other editors that install from Open VSX:** search for **Easy SSH** in the Extensions view ([Open VSX page](https://open-vsx.org/extension/easy-ssh/easy-ssh)).
 - **Offline:** download the `.vsix` from [GitHub Releases](https://github.com/dhlptx00/EasySSH/releases), then run **Extensions: Install from VSIX…**.
 
 ## What you can do
@@ -41,7 +41,8 @@ Easy SSH talks SSH directly from your editor. **Nothing is installed on the serv
 
 ## Requirements and limitations
 
-- **Your side:** VS Code 1.85 or newer, or Cursor, on Windows, macOS or Linux.
+- **Your side:** VS Code 1.74 or newer, or an editor built on it (Cursor, Windsurf, VSCodium, Trae, Kiro, Antigravity, code-server), on Windows, macOS or Linux.
+- **Browser-based editors (code-server):** Easy SSH runs on the machine that serves the editor. Connections start from there and use its `~/.ssh`, and downloads and uploads use its disk, not the computer running the browser. In desktop editors, also over Remote-SSH, it runs on your own computer.
 - **Server:** a Linux or Unix server with OpenSSH or a compatible SSH server. Windows servers aren't supported.
 - **Downloads and uploads need SFTP.** On a server without SFTP you still get the terminal, but no file transfers.
 - **Folder tracking needs bash, zsh or fish.** In these shells the terminal follows `cd`, so clicks and drops use the right folder. Other shells work, but names aren't linked until Easy SSH knows the folder.
