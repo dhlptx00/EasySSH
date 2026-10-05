@@ -35,6 +35,8 @@ class PathLink extends vscode.TerminalLink {
 interface LiveTerminal {
   pty: EasySshPty;
   terminal: vscode.Terminal;
+  /** The tab name Easy SSH gave it. terminal.name follows renames, so it can't be used to restore it. */
+  name: string;
   app: EasySshApp;
   /** The URI authority of files opened from this terminal (easyssh://<authority>/path). */
   authority?: string;
@@ -66,11 +68,15 @@ function exists(file: string): boolean {
   }
 }
 
-/** How terminal links open: Alt when multi-cursor uses Ctrl/Cmd, else Ctrl (Cmd on macOS). */
-function linkModifier(): string {
-  const multiCursor = vscode.workspace.getConfiguration('editor').get<string>('multiCursorModifier');
-  if (multiCursor === 'ctrlCmd') return process.platform === 'darwin' ? 'Option' : 'Alt';
-  return process.platform === 'darwin' ? 'Cmd' : 'Ctrl';
+/**
+ * How terminal links open: Alt when multi-cursor uses Ctrl/Cmd, else Ctrl (Cmd on macOS).
+ * clientPlatform is undefined when the window runs on another machine (code-server in a
+ * browser): the API doesn't tell that machine's OS, so both keys are named.
+ */
+export function linkModifier(clientPlatform: NodeJS.Platform | undefined, multiCursor: unknown): string {
+  const [other, mac] = multiCursor === 'ctrlCmd' ? ['Alt', 'Option'] : ['Ctrl', 'Cmd'];
+  if (clientPlatform === undefined) return `${other}/${mac}`;
+  return clientPlatform === 'darwin' ? mac : other;
 }
 
 function importId(name: string, taken: Set<string>): string {
@@ -157,6 +163,8 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
     private readonly store: ConnectionStore,
     private readonly output: vscode.OutputChannel,
     private readonly status: vscode.StatusBarItem,
+    /** The OS of the machine showing the window; undefined when that isn't this one. */
+    private readonly clientPlatform: NodeJS.Platform | undefined,
   ) {
     this.status.text = '$(remote) Easy SSH';
     this.status.tooltip = 'Open Easy SSH';
@@ -233,7 +241,7 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
   }
 
   private nextName(): string {
-    const used = new Set(this.lives.map((live) => live.terminal.name));
+    const used = new Set(this.lives.map((live) => live.name));
     if (!used.has('Easy SSH')) return 'Easy SSH';
     let index = 2;
     while (used.has(`Easy SSH ${index}`)) index += 1;
@@ -253,7 +261,7 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
       isTransient: true,
       location: inEditor && vscode.TerminalLocation.Editor !== undefined ? vscode.TerminalLocation.Editor : vscode.TerminalLocation.Panel,
     });
-    const live: LiveTerminal = { pty, terminal, app };
+    const live: LiveTerminal = { pty, terminal, app, name };
     this.lives.push(live);
     this.active = live;
     this.shown = true;
@@ -695,7 +703,7 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
       downloadFolder: () => this.downloadFolder(),
       downloadLabel: () => downloadFolderLabel(this.downloadFolder(), this.folders.desktop, os.homedir()),
       plainClick: () => this.plainClick(),
-      clickLabel: () => (this.plainClick() ? 'Click' : `${linkModifier()}+click`),
+      clickLabel: () => (this.plainClick() ? 'Click' : `${linkModifier(this.clientPlatform, vscode.workspace.getConfiguration('editor').get('multiCursorModifier'))}+click`),
       confirmUpload: (question) => this.confirmUpload(question),
       resolveConflict: (existing, remoteDir) => this.resolveConflict(existing, remoteDir),
       confirmLocalUpload: (paths) => this.confirmLocalUpload(paths),
@@ -722,7 +730,7 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
       autoReconnect: () => settings().get<boolean>('autoReconnect') === true,
       setTitle: (title) => {
         const live = liveOf();
-        if (live) live.pty.rename(title ? `SSH: ${title}` : live.terminal.name);
+        if (live) live.pty.rename(title ? `SSH: ${title}` : live.name);
       },
       transferActive: (active) => {
         const live = liveOf();

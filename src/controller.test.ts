@@ -61,7 +61,7 @@ describe('controller: two Easy SSH terminals', () => {
     const { EasySshController } = await import('./controller');
     const status = { text: '', tooltip: '', command: '', show() {}, hide() {} };
     const output = { appendLine() {}, show() {} };
-    const controller = new EasySshController({} as never, output as never, status as never);
+    const controller = new EasySshController({} as never, output as never, status as never, 'linux');
     controller.newTerminal();
     controller.newTerminal();
     assert.deepEqual(created.map((terminal) => terminal.name), ['Easy SSH', 'Easy SSH 2']);
@@ -88,6 +88,20 @@ describe('controller: two Easy SSH terminals', () => {
     const impostor = { name: 'Easy SSH 2', exitStatus: undefined, show() {} };
     assert.deepEqual(controller.provideTerminalLinks({ line: 'a.txt', terminal: impostor } as never), []);
 
+    // A session renames the tab and VS Code reports the new name; ending it restores the one Easy SSH gave.
+    const renames: string[] = [];
+    const first = (controller as unknown as { lives: { pty: { rename(name: string): void }; app: { host: { setTitle(title?: string): void } } }[] }).lives[0];
+    first.pty.rename = (name) => {
+      renames.push(name);
+      created[0].name = name;
+    };
+    first.app.host.setTitle('web-01');
+    assert.equal(created[0].name, 'SSH: web-01');
+    controller.newTerminal();
+    assert.equal(created[2].name, 'Easy SSH 3', 'a renamed tab keeps its Easy SSH name reserved');
+    first.app.host.setTitle(undefined);
+    assert.deepEqual(renames, ['SSH: web-01', 'Easy SSH']);
+
     // Closing the left pane keeps the right one working.
     controller.onClosed(created[0] as never);
     assert.equal(controller.provideTerminalLinks({ line: 'c', terminal: created[1] } as never)[0].link.remotePath, '/right/c');
@@ -95,6 +109,16 @@ describe('controller: two Easy SSH terminals', () => {
 });
 
 describe('controller helpers', () => {
+  it('names the link key of the machine showing the window, or both when unknown (code-server)', async () => {
+    const { linkModifier } = await import('./controller');
+    assert.equal(linkModifier('darwin', 'alt'), 'Cmd');
+    assert.equal(linkModifier('win32', undefined), 'Ctrl');
+    assert.equal(linkModifier('linux', 'ctrlCmd'), 'Alt');
+    assert.equal(linkModifier('darwin', 'ctrlCmd'), 'Option');
+    assert.equal(linkModifier(undefined, 'alt'), 'Ctrl/Cmd');
+    assert.equal(linkModifier(undefined, 'ctrlCmd'), 'Alt/Option');
+  });
+
   it('clamps number settings and falls back on bad values', async () => {
     const { numberSetting } = await import('./controller');
     assert.equal(numberSetting(undefined, 32, 1, 64), 32);
@@ -132,7 +156,7 @@ describe('controller: panel maximize (B10)', () => {
     config.maximizePanel = setting;
     const { EasySshController } = await import('./controller');
     const status = { text: '', tooltip: '', command: '', show() {}, hide() {} };
-    const controller = new EasySshController({} as never, { appendLine() {}, show() {} } as never, status as never);
+    const controller = new EasySshController({} as never, { appendLine() {}, show() {} } as never, status as never, 'linux');
     commandLog.length = 0;
     controller.newTerminal();
     const lives = (controller as unknown as { lives: { terminal: never; pty: { rows: number } }[] }).lives;
@@ -197,7 +221,7 @@ describe('controller: remote files in editor tabs', () => {
     assert.equal(editorAuthority('***'), 'server');
     const status = { text: '', tooltip: '', command: '', show() {}, hide() {} };
     const output = { appendLine() {}, show() {} };
-    const controller = new EasySshController({} as never, output as never, status as never);
+    const controller = new EasySshController({} as never, output as never, status as never, 'linux');
     controller.newTerminal();
     controller.newTerminal();
     const lives = (controller as unknown as { lives: { app: Record<string, unknown> }[] }).lives.slice(-2);
