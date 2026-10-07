@@ -2,7 +2,7 @@
   "name": "easy-ssh",
   "displayName": "Easy SSH – SSH Client, SFTP & SSH Terminal",
   "description": "SSH client and SFTP in a VS Code / Cursor terminal: saved hosts, jump hosts, ~/.ssh/config import. Ctrl+click remote files to download, edit, rename, delete; drop files to upload. No server install.",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "publisher": "easy-ssh",
   "license": "MIT",
   "icon": "media/icon.png",

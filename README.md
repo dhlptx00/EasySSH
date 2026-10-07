@@ -16,10 +16,6 @@ Easy SSH talks SSH directly from your editor. **Nothing is installed on the serv
 
 ![Easy SSH overview: a home screen with your recent connection, a guided /new setup with Test connection, colors that follow your VS Code theme, sign-in options, jump hosts, a real login shell, a Ctrl+click or Cmd+click menu to download, open, rename or delete a file or folder, editing a remote file in a VS Code tab, and drop to upload](media/readme/infographic-0.4.0.png)
 
-![Demo: pick a connection, open the remote shell, Ctrl+click a folder and download it with progress, then Ctrl+click config.yaml, open it in an editor tab, change a value and save it back to the server](media/readme/connect-menu-open.gif)
-
-*Quick demo: connect, Ctrl+click a folder and download it, then Ctrl+click a file, open it in an editor tab and save it back with Ctrl+S. On macOS, use Cmd+click and Cmd+S.*
-
 ## Install
 
 - **VS Code:** open the Extensions view, search for **Easy SSH**, or run `ext install easy-ssh.easy-ssh` in Quick Open (Ctrl+P / Cmd+P).
