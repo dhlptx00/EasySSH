@@ -4,6 +4,18 @@ All notable changes to Easy SSH. Dates are in UTC+8.
 
 If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh&ssr=false#review-details) or [Open VSX](https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews) helps others find it.
 
+## [0.4.2] - 2026-10-07
+
+### Added
+
+- After your fifth successful connection, Easy SSH asks once whether you'd rate it (Rate / Not now). Rate opens the VS Code Marketplace review page in VS Code and the Open VSX page in other editors. It never asks again, whatever you choose.
+
+### Changed
+
+- Clearer Marketplace listing: the name, description and keywords now say SSH client, SFTP and SSH terminal.
+- The README opens with a short real recording: connect, Ctrl+click a file, Download, with progress.
+- A shorter bug report form on GitHub; questions go to GitHub Discussions.
+
 ## [0.4.1] - 2026-10-05
 
 ### Changed
@@ -162,6 +174,7 @@ If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace
 - Open a remote directory, click a file to download it, and drop local files to upload them.
 - Connect with a password, a private key, or an SSH agent, including one or more jump hosts.
 
+[0.4.2]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.2
 [0.4.1]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.1
 [0.4.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.0
 [0.3.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.3.0
