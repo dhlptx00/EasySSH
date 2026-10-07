@@ -14,6 +14,9 @@ export interface SecretStore {
 const CONNECTIONS = 'easySsh.connections';
 const HOST_KEYS = 'easySsh.knownHosts';
 const LAST_USED = 'easySsh.lastUsed';
+const RATING = 'easySsh.ratingPrompt';
+/** Successful connections before the one-time rating prompt. */
+export const RATING_AFTER = 5;
 
 function secretKey(id: string): string {
   return `easySsh.secret.${id}`;
@@ -95,6 +98,15 @@ export class ConnectionStore {
 
   async markUsed(id: string, when = Date.now()): Promise<void> {
     await this.state.update(LAST_USED, { ...this.lastUsed(), [id]: when });
+  }
+
+  /** Counts a successful connection. True exactly once, on the RATING_AFTER-th; never again after that. */
+  async countConnect(): Promise<boolean> {
+    const stored = this.state.get<unknown>(RATING);
+    if (stored === 'done') return false;
+    const count = (typeof stored === 'number' ? stored : 0) + 1;
+    await this.state.update(RATING, count >= RATING_AFTER ? 'done' : count);
+    return count >= RATING_AFTER;
   }
 
   async secret(id: string): Promise<SecretPayload> {

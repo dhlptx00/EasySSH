@@ -18,14 +18,14 @@ body:
     id: version
     attributes:
       label: Easy SSH version
-      placeholder: "0.2.0"
+      placeholder: "0.4.1"
     validations:
       required: true
   - type: input
     id: editor
     attributes:
       label: Editor and version
-      description: VS Code or Cursor, with the version from Help → About.
+      description: VS Code, Cursor, Windsurf, VSCodium, … with the version from Help → About.
       placeholder: "VS Code 1.105.0 / Cursor 1.7"
     validations:
       required: true
@@ -49,13 +49,6 @@ body:
       label: Sign-in method
       options: [Password, Private key, SSH agent, Pageant, Keyboard-interactive / 2FA]
       multiple: true
-    validations:
-      required: true
-  - type: dropdown
-    id: jump
-    attributes:
-      label: Jump host?
-      options: ["No", "Yes, one", "Yes, several"]
   - type: textarea
     id: log
     attributes:

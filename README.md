@@ -1,4 +1,4 @@
-# Easy SSH – SSH Client & SFTP Drag-and-Drop
+# Easy SSH – SSH Client, SFTP & SSH Terminal
 
 [![VS Code installs](https://vsmarketplacebadges.dev/installs-short/easy-ssh.easy-ssh.svg)](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh)
 [![Open VSX downloads](https://img.shields.io/open-vsx/dt/easy-ssh/easy-ssh?label=Open%20VSX%20downloads)](https://open-vsx.org/extension/easy-ssh/easy-ssh)
@@ -9,6 +9,10 @@
 An SSH client in a terminal tab of VS Code, Cursor and other VS Code-based editors. Save your hosts, hop through jump hosts, import `~/.ssh/config`, Ctrl+click a file or folder name to download, open, rename or delete it, and drag files onto the terminal to upload them.
 
 Easy SSH talks SSH directly from your editor. **Nothing is installed on the server**, and no remote editor server is downloaded, so it works on old, small, and locked-down machines where Remote-SSH can't run.
+
+![Demo: connect to web-01 from the Easy SSH home screen, list files, Ctrl+click db-dump-2026-10-07.sql.gz, choose Download and watch the progress notification](media/readme/demo.gif)
+
+*Real recording: connect from the home screen, Ctrl+click a file, Download, and follow the progress ([mp4](media/readme/demo.mp4)).*
 
 ![Easy SSH overview: a home screen with your recent connection, a guided /new setup with Test connection, colors that follow your VS Code theme, sign-in options, jump hosts, a real login shell, a Ctrl+click or Cmd+click menu to download, open, rename or delete a file or folder, editing a remote file in a VS Code tab, and drop to upload](media/readme/infographic-0.4.0.png)
 
