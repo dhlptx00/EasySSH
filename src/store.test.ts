@@ -87,4 +87,13 @@ describe('connection store', () => {
     await backing.state.update('easySsh.lastUsed', { c: 'x', d: -1, e: 5 });
     assert.deepEqual(store.lastUsed(), { e: 5 });
   });
+
+  it('asks for a rating once, on the fifth successful connection, and never again', async () => {
+    const backing = memory();
+    const store = new ConnectionStore(backing.state, backing.secrets);
+    const answers: boolean[] = [];
+    for (let i = 0; i < 8; i += 1) answers.push(await store.countConnect());
+    assert.deepEqual(answers, [false, false, false, false, true, false, false, false]);
+    assert.equal(backing.state.get('easySsh.ratingPrompt'), 'done');
+  });
 });

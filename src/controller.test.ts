@@ -109,6 +109,13 @@ describe('controller: two Easy SSH terminals', () => {
 });
 
 describe('controller helpers', () => {
+  it('sends VS Code to the Marketplace and other editors to Open VSX for a rating', async () => {
+    const { ratingUrl } = await import('./controller');
+    assert.match(ratingUrl('vscode'), /marketplace\.visualstudio\.com.*review-details/);
+    assert.match(ratingUrl('vscode-insiders'), /marketplace/);
+    for (const scheme of ['cursor', 'vscodium', 'windsurf', 'code-oss']) assert.match(ratingUrl(scheme), /open-vsx\.org\/extension\/easy-ssh\/easy-ssh\/reviews/);
+  });
+
   it('names the link key of the machine showing the window, or both when unknown (code-server)', async () => {
     const { linkModifier } = await import('./controller');
     assert.equal(linkModifier('darwin', 'alt'), 'Cmd');

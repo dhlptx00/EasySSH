@@ -68,6 +68,13 @@ function exists(file: string): boolean {
   }
 }
 
+/** Where to rate: the Marketplace in VS Code, Open VSX in Cursor, VSCodium and other editors. */
+export function ratingUrl(uriScheme: string): string {
+  return /^vscode(-insiders)?$/.test(uriScheme)
+    ? 'https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh&ssr=false#review-details'
+    : 'https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews';
+}
+
 /**
  * How terminal links open: Alt when multi-cursor uses Ctrl/Cmd, else Ctrl (Cmd on macOS).
  * clientPlatform is undefined when the window runs on another machine (code-server in a
@@ -498,6 +505,13 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
     });
   }
 
+  /** Shown once, after the fifth successful connection; any answer, or none, ends it. */
+  private async askForRating(): Promise<void> {
+    const rate = 'Rate';
+    const picked = await vscode.window.showInformationMessage('Enjoying Easy SSH? A rating helps others find it.', rate, 'Not now');
+    if (picked === rate) await vscode.env.openExternal(vscode.Uri.parse(ratingUrl(vscode.env.uriScheme)));
+  }
+
   private async pickSaveFile(folder: string, name: string): Promise<string | undefined> {
     const picked = await vscode.window.showSaveDialog({
       title: `Download ${name}`,
@@ -693,7 +707,10 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
         return { detail: files ? 'SFTP works' : 'terminal only, no SFTP' };
       },
       lastUsed: () => this.store.lastUsed(),
-      markUsed: (id) => this.store.markUsed(id),
+      markUsed: async (id) => {
+        await this.store.markUsed(id);
+        if (await this.store.countConnect()) void this.askForRating();
+      },
       theme: () => ({
         // activeColorTheme is missing in old hosts and test stubs: count those as dark.
         editorKind: editorThemeKind((vscode.window.activeColorTheme as vscode.ColorTheme | undefined)?.kind ?? 2),
