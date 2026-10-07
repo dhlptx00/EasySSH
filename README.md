@@ -1,9 +1,10 @@
 # Easy SSH – SSH Client & SFTP Drag-and-Drop
 
-[![VS Code Marketplace](https://img.shields.io/badge/VS%20Code%20Marketplace-Easy%20SSH-007ACC)](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh)
-[![Open VSX](https://img.shields.io/open-vsx/v/easy-ssh/easy-ssh?label=Open%20VSX)](https://open-vsx.org/extension/easy-ssh/easy-ssh)
+[![VS Code installs](https://vsmarketplacebadges.dev/installs-short/easy-ssh.easy-ssh.svg)](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh)
+[![Open VSX downloads](https://img.shields.io/open-vsx/dt/easy-ssh/easy-ssh?label=Open%20VSX%20downloads)](https://open-vsx.org/extension/easy-ssh/easy-ssh)
+[![GitHub release](https://img.shields.io/github/v/release/dhlptx00/EasySSH)](https://github.com/dhlptx00/EasySSH/releases/latest)
 [![CI](https://github.com/dhlptx00/EasySSH/actions/workflows/ci.yml/badge.svg)](https://github.com/dhlptx00/EasySSH/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License: MIT](https://img.shields.io/github/license/dhlptx00/EasySSH)](LICENSE)
 
 An SSH client in a terminal tab of VS Code, Cursor and other VS Code-based editors. Save your hosts, hop through jump hosts, import `~/.ssh/config`, Ctrl+click a file or folder name to download, open, rename or delete it, and drag files onto the terminal to upload them.
 
