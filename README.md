@@ -33,7 +33,7 @@ Easy SSH talks SSH directly from your editor. **Nothing is installed on the serv
 - **Ctrl+click a file or folder name** (Cmd+click on macOS) for its action menu. Files: **Download**, **Open**, **Rename**, **Delete**. Folders: **Download**, **Upload**, **Rename**, **Delete**
 - **Open a remote text file in a VS Code editor tab** and save it back to the server with Ctrl+S (Cmd+S). Permissions are kept, and saving warns you if the file changed on the server in the meantime
 - **Download a folder** with everything in it, the same way
-- **Upload:** drag files or folders onto the terminal, as before. They go into the current remote folder
+- **Upload:** drag files or folders onto the terminal. They go into the current remote folder
 - Names you create with commands (`touch`, `mv`, `tar`, …) can be clicked right away, without a `cd`
 - Follow big transfers in a progress notification with **Cancel**
 - Reconnect after a dropped connection, back into the same folder
@@ -87,7 +87,7 @@ On the connection panel, type `/` to open the command list. Connections and syst
 | ![The /new wizard on the sign-in step: Password, Private key or SSH agent](media/readme/03-new-connection-form.png) | ![Editing a connection: pick the field to change](media/readme/04-edit-connection-jump-host.png) | ![Delete confirmation for a saved connection](media/readme/05-delete-connection-confirm.png) |
 | One field per step, with help and checks | Pick a field, change it, save | Confirm before a connection is removed |
 
-`/new` asks one field per step (Step 2 of 6, …), with a short help line under each field and a red message when a value can't work: an empty host, a port that isn't a number from 1 to 65535, a key file that doesn't exist. Esc goes back one step. The last page shows every value and the matching `ssh` command; from there, **Test connection** connects and signs in without saving, **Save** adds the connection, and **Back** returns to the last step. Enter on a value changes just that field.
+`/new` asks one field per step (Step 2 of 6, …). The Host step also takes what you'd type after `ssh`, such as `deploy@10.0.4.12:2222`, and fills in User and Port from it. Each step has a short help line under each field and a red message when a value can't work: an empty host, a port that isn't a number from 1 to 65535, a key file that doesn't exist. Esc goes back one step. The last page shows every value and the matching `ssh` command; from there, **Test connection** connects and signs in without saving, **Save** adds the connection, and **Back** returns to the last step. Enter on a value changes just that field.
 
 ![The /new summary: every value, the matching ssh command, and a successful Test connection](media/readme/20-new-connection-test.png)
 
@@ -129,7 +129,7 @@ Ctrl+click a file or folder name in the remote shell (Cmd+click on macOS) to ope
 | Action | Files | Folders | What it does |
 | --- | --- | --- | --- |
 | Download | ✓ | ✓ | Opens a save dialog (for a folder: a folder picker), starting in your download folder, then downloads with a progress notification and **Cancel** |
-| Upload… | | ✓ | Opens a file picker titled with the target, e.g. `Upload to /home/demo/project/logs`, and uploads into the clicked folder with a progress notification. Existing names ask first. To upload into the current folder, drop files on the terminal as before |
+| Upload… | | ✓ | Opens a file picker titled with the target, e.g. `Upload to /home/demo/project/logs`, and uploads into the clicked folder with a progress notification. Existing names ask first. To upload into the current folder, drop files on the terminal |
 | Open | text | | Opens the file in a VS Code editor tab. **Ctrl+S** (Cmd+S) saves it straight back to the server, keeping its permissions. Files over 5 MB ask first: **Open Anyway**, **Download** or Cancel |
 | Rename… | ✓ | ✓ | Asks for the new name (the part before the extension is selected), checks it isn't taken, asks once more, then renames over SFTP |
 | Delete… | ✓ | ✓ | Asks first. For a folder the question counts its files, e.g. `Delete folder "logs" and its 128 files?` (`5000+ files` for very big ones). A folder is deleted with everything in it |
@@ -181,7 +181,7 @@ Ctrl+click a file name (Cmd+click on macOS) and choose **Download**. The save di
 
 ### Upload
 
-Drag files or folders from your computer onto the Easy SSH terminal, as before. They're written into the current remote folder of the terminal you drop them on. In a split view, a drop goes to the pane under the mouse. You can also Ctrl+click a folder name and choose **Upload…** to pick files (on macOS, files or folders) to put into that folder.
+Drag files or folders from your computer onto the Easy SSH terminal. They're written into the current remote folder of the terminal you drop them on. In a split view, a drop goes to the pane under the mouse. You can also Ctrl+click a folder name and choose **Upload…** to pick files (on macOS, files or folders) to put into that folder.
 
 - A folder is uploaded with its contents, keeping its permission bits. Symbolic links inside it are skipped.
 - If something with the same name already exists, Easy SSH asks first: **Replace**, **Keep Both** (uploads as `name (1)`), or **Skip**.
@@ -195,7 +195,7 @@ A path you **paste** is typed, never uploaded, when it matches what's on your cl
 
 ### Names stay current
 
-Every name the remote folder holds is a link, also right after a command creates or renames it: after each command the terminal lists the folder again (once, shortly after the prompt returns; very big folders only when they changed). So `touch notes.md`, `mv a b` or `tar xf release.tgz` give you clickable names without a `cd`.
+Every name the current remote folder holds is a link, also right after a command creates or renames it: after each command the terminal lists the folder again (once, shortly after the prompt returns; very big folders only when they changed). So `touch notes.md`, `mv a b` or `tar xf release.tgz` give you clickable names without a `cd`. Names printed before a `cd` into another folder aren't links any more; run `ls` again there.
 
 VS Code can keep a link under a pointer that hasn't moved while the text below it changes, for example after `clear && ls`. Easy SSH checks the row when you click: if a different name is there now, the menu is for that name; if it can't tell, it asks you to move the pointer off the name and click again.
 
@@ -226,7 +226,7 @@ If `editor.multiCursorModifier` is set to `ctrlCmd`, names open with Alt+click i
 
 ## Downloads
 
-Downloads go to your **Downloads** folder: the one your system actually uses, including a localized or redirected folder on Windows and Linux. If there's none, they go to the Desktop. Type `/folder` on the connection panel, or run **Easy SSH: Set Download Folder**, to choose another folder. The folder in use is named in one of the connection panel's tips and in **Output → Easy SSH**.
+Downloads go to your **Downloads** folder: the one your system actually uses, including a localized or redirected folder on Windows and Linux. If there's none, they go to the Desktop, or else your home folder. Type `/folder` on the connection panel, or run **Easy SSH: Set Download Folder**, to choose another folder. The folder in use is named in one of the connection panel's tips and in **Output → Easy SSH**.
 
 ## Jump hosts and `~/.ssh/config`
 
@@ -298,7 +298,7 @@ Use Remote-SSH when you want to develop *on* the server. Use Easy SSH when you w
 
 **My host uses `ProxyCommand`.** Easy SSH can't run proxy commands. If it's an `ssh -W` hop, use `ProxyJump` instead. `/import` lists the hosts it skipped.
 
-**Where did my download go?** To your Downloads folder, unless you chose another one with `/folder`. The status bar and **Output → Easy SSH** show the full path.
+**Where did my download go?** To your Downloads folder, unless you chose another one with `/folder`. The message shown when the download finishes and **Output → Easy SSH** show the full path.
 
 **How do I download a folder?** Ctrl+click its name (Cmd+click on macOS) and choose **Download**. It downloads with all its files and subfolders.
 
@@ -336,7 +336,7 @@ Questions and ideas: [GitHub Discussions](https://github.com/dhlptx00/EasySSH/di
 
 ## Rate it
 
-If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh&ssr=false#review-details) or [Open VSX](https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews) helps others find it.
+After your fifth connection Easy SSH asks once whether you'd rate it (**Rate** or **Not now**); it never asks again. If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh&ssr=false#review-details) or [Open VSX](https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews) helps others find it.
 
 ## Support
 
