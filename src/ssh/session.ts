@@ -23,7 +23,7 @@ import type {
   UploadResult,
 } from '../types';
 import { AuthFailure, AuthPlanner, type AskAnswer, type AskRequest, type AuthEndpoint } from './auth';
-import { HostKeyDeclined, HostKeyError, TooManyFiles, TransferCancelled, TransferError, humanizeSshError } from './errors';
+import { HostKeyDeclined, HostKeyError, TooManyFiles, TransferCancelled, TransferError, humanizeSshError, sftpCode } from './errors';
 import { decideHostKey, hopIds, type HostKeyPolicy } from './hostKeys';
 import { knownHostsLine, type KnownHostEntry } from './knownHosts';
 import { SHELL_PROBE, shellKindFromProbe, type ShellKind } from './shellFeed';
@@ -484,12 +484,6 @@ export async function collectUploads(
     await walk(local, remote, name, true);
   }
   return { files, directories, skipped, tops };
-}
-
-/** SFTP status code 2 (no such file) or 3 (permission denied). */
-function sftpCode(err: unknown): number | undefined {
-  const code = (err as { code?: unknown } | null)?.code;
-  return typeof code === 'number' ? code : undefined;
 }
 
 /** Re-root a planned path from one top-level target to another. */

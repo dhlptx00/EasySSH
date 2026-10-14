@@ -46,6 +46,11 @@ export function truncate(text: string, width: number): string {
   return `${out}…`;
 }
 
+/** The short word for a sign-in method: "key" for privateKey, otherwise the method itself. */
+export function authWord(auth: string): string {
+  return auth === 'privateKey' ? 'key' : auth;
+}
+
 export function formatSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
   if (bytes < 1024) return `${Math.floor(bytes)} B`;

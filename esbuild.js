@@ -23,6 +23,24 @@ const pageant = {
   },
 };
 
+/**
+ * Easy SSH only uses the ssh2 client. ssh2's index also loads its SSH server and key
+ * generator; leave both out of the bundle. Fails the build if ssh2's index changes.
+ */
+const clientOnly = {
+  name: 'ssh2-client-only',
+  setup(build) {
+    build.onLoad({ filter: /[\\/]ssh2[\\/]lib[\\/]index\.js$/ }, async (args) => {
+      let source = await fs.promises.readFile(args.path, 'utf8');
+      for (const [from, to] of [["Server: require('./server.js'),", ''], ["...require('./keygen.js'),", '']]) {
+        if (!source.includes(from)) throw new Error(`ssh2 index.js changed (${from}): update the client-only rewrite in esbuild.js`);
+        source = source.replace(from, to);
+      }
+      return { contents: source, loader: 'js' };
+    });
+  },
+};
+
 const watch = process.argv.includes('--watch');
 const production = process.argv.includes('--production');
 
@@ -36,11 +54,11 @@ const options = {
   external: ['vscode', 'cpu-features', '*.node'],
   platform: 'node',
   format: 'cjs',
-  target: 'node18',
+  target: 'node16',
   minify: production,
   sourcemap: !production,
   logLevel: 'info',
-  plugins: [pageant],
+  plugins: [pageant, clientOnly],
   // The header shows the version; defining it keeps the whole package.json out of the bundle.
   define: { 'process.env.EASY_SSH_VERSION': JSON.stringify(require('./package.json').version) },
 };

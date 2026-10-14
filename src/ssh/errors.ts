@@ -119,3 +119,9 @@ export function humanizeSshError(err: unknown): string {
   if (message && message.length < 180) return message;
   return 'Connection failed';
 }
+
+/** The status code an SFTP (or Node) error carries, if any. */
+export function sftpCode(err: unknown): number | string | undefined {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'number' || typeof code === 'string' ? code : undefined;
+}

@@ -1,4 +1,4 @@
-import { formatFingerprint, relativeTime, shortenPath, truncate, displayWidth } from '../text';
+import { authWord, formatFingerprint, relativeTime, shortenPath, truncate, displayWidth } from '../text';
 import type { RowAnchor } from './viewport';
 import { classifyName } from '../fileTypes';
 import type { BrowseEntry, Notice } from '../types';
@@ -352,7 +352,7 @@ function deleteCard(screen: Extract<Screen, { kind: 'confirm' }>): Omit<PanelLay
     { pieces: [{ text: '✗ ', tone: 'error', bold: true }, { text: `Delete ${item.name}?`, tone: 'error', bold: true }] },
     blankRow(),
     { pieces: [{ text: 'Host      ', tone: 'muted' }, { text: item.userHost, bold: true }] },
-    { pieces: [{ text: 'Sign-in   ', tone: 'muted' }, { text: authWord(item), tone: authTone(item) }, { text: item.via ? ` via ${item.via}` : '', tone: 'muted' }] },
+    { pieces: [{ text: 'Sign-in   ', tone: 'muted' }, { text: authWord(item.auth), tone: authTone(item) }, { text: item.via ? ` via ${item.via}` : '', tone: 'muted' }] },
     blankRow(),
     textRow('This removes the saved connection and its stored password or passphrase.', 'muted'),
     textRow('It cannot be undone.', 'muted'),
@@ -781,11 +781,6 @@ function closesName(plain: string, end: number): boolean {
   return isNameBoundary(ch, 'after');
 }
 
-function authWord(item: Pick<ConnectionItem, 'auth'>): string {
-  if (item.auth === 'privateKey') return 'key';
-  return item.auth;
-}
-
 function authToneOf(auth: string): Tone {
   if (auth === 'privateKey') return 'success';
   if (auth === 'password') return 'warn';
@@ -881,7 +876,7 @@ function connectionTable(
   if (items.length === 0) return [];
   const lead = 2;
   const gap = 2;
-  const authText = (item: ConnectionItem) => authWord(item) + (item.via ? ` via ${item.via}` : '');
+  const authText = (item: ConnectionItem) => authWord(item.auth) + (item.via ? ` via ${item.via}` : '');
   const lastText = (item: ConnectionItem) => relativeTime(item.lastUsed, now) || '—';
   const tokenText = (item: ConnectionItem) => `/${tokens.get(item.id) ?? item.name}`;
   const widest = (values: string[], floor: number, cap: number) => Math.min(cap, Math.max(floor, ...values.map((value) => displayWidth(value))));
@@ -929,7 +924,7 @@ function connectionTable(
       if (column.key === 'name') pieces.push({ text: cell(item.name, column), bold: true });
       else if (column.key === 'host') pieces.push({ text: cell(item.userHost, column), tone: 'text' });
       else if (column.key === 'auth') {
-        const word = authWord(item);
+        const word = authWord(item.auth);
         const full = cell(authText(item), column);
         pieces.push({ text: full.slice(0, word.length), tone: authTone(item), bold: isSelected });
         pieces.push({ text: full.slice(word.length), tone: 'muted' });

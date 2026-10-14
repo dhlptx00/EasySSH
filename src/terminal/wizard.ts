@@ -1,5 +1,5 @@
 import { formatJumps, parseJumpList } from '../ssh/jump';
-import { expandHome } from '../text';
+import { authWord, expandHome } from '../text';
 import type { AuthMethod, ConnectionRecord, JumpSpec, SecretUpdate } from '../types';
 import { isReservedCommand } from './commands';
 
@@ -193,11 +193,6 @@ export function stepsBefore(step: Step, draft: Draft): Step[] {
     cursor = following;
   }
   return done;
-}
-
-function authWord(auth: AuthMethod | ''): string {
-  if (auth === 'privateKey') return 'key';
-  return auth;
 }
 
 export function promptFor(step: Step, draft: Draft): Prompt {
