@@ -33,8 +33,7 @@ describe('package.json', () => {
   });
 
   it('ships the Pageant helper next to the bundle', () => {
-    const ignore = fs.readFileSync(path.join(root, '.vscodeignore'), 'utf8').split(/\r?\n/);
-    assert.ok(!ignore.some((line) => /^dist\b/.test(line) || line === '**/*.exe'));
+    assert.ok((manifest as { files?: string[] }).files?.includes('dist/pagent.exe'));
     assert.match(fs.readFileSync(path.join(root, 'esbuild.js'), 'utf8'), /pagent\.exe/);
   });
 

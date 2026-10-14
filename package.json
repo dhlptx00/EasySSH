@@ -264,6 +264,15 @@
       }
     }
   },
+  "files": [
+    "dist/extension.js",
+    "dist/pagent.exe",
+    "media/easy-ssh.svg",
+    "media/icon.png",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "scripts": {
     "vscode:prepublish": "npm run check && npm run build",
     "compile": "node esbuild.js",

@@ -59,6 +59,12 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: npm run package
 
+      - name: Package contents are only the allowlist
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          printf '%s\n' CHANGELOG.md LICENSE README.md dist/extension.js dist/pagent.exe media/easy-ssh.svg media/icon.png package.json > expected.txt
+          npx @vscode/vsce ls --no-dependencies | LC_ALL=C sort | diff expected.txt -
+
       - name: Upload VSIX
         if: matrix.os == 'ubuntu-latest' && matrix.node == 22
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
