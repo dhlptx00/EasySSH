@@ -123,6 +123,12 @@ describe('connection wizard', () => {
   it('rejects an empty host and a port that is not a number', () => {
     assert.match(applyStep('host', '', emptyDraft(), ctx).error ?? '', /Host is required/);
     assert.match(applyStep('host', 'a b', emptyDraft(), ctx).error ?? '', /spaces/);
+    const pasted = applyStep('host', 'demo@127.0.0.1:2222', emptyDraft(), ctx).draft;
+    assert.deepEqual([pasted.username, pasted.host, pasted.port], ['demo', '127.0.0.1', '2222']);
+    const v6 = applyStep('host', '[fe80::1]:2200', emptyDraft(), ctx).draft;
+    assert.deepEqual([v6.host, v6.port], ['fe80::1', '2200']);
+    assert.equal(applyStep('host', 'fe80::1', emptyDraft(), ctx).draft.host, 'fe80::1');
+    assert.match(applyStep('host', 'demo@', emptyDraft(), ctx).error ?? '', /Host is required/);
     assert.match(applyStep('port', 'abc', emptyDraft(), ctx).error ?? '', /must be a number/);
     assert.match(applyStep('port', '0', emptyDraft(), ctx).error ?? '', /between 1 and 65535/);
   });

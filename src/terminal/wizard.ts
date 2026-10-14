@@ -403,9 +403,20 @@ export function applyStep(step: Step, typed: string, draft: Draft, ctx: ApplyCon
   }
 
   if (step === 'host') {
-    const host = value.trim();
-    if (!host) return { draft, error: 'Host is required: a hostname or IP address' };
+    let host = value.trim();
     if (/\s/.test(host)) return { draft, error: 'A host cannot contain spaces' };
+    // Accept what people paste from ssh: user@host, host:port, user@[::1]:2222.
+    const at = host.lastIndexOf('@');
+    if (at > 0) {
+      next.username = host.slice(0, at);
+      host = host.slice(at + 1);
+    }
+    const withPort = /^\[([^\]]+)\]:(\d+)$/.exec(host) ?? /^([^:]+):(\d+)$/.exec(host);
+    if (withPort) {
+      host = withPort[1];
+      next.port = withPort[2];
+    }
+    if (!host) return { draft, error: 'Host is required: a hostname or IP address' };
     next.host = host;
     return { draft: next };
   }
