@@ -195,7 +195,7 @@ A path you **paste** is typed, never uploaded, when it matches what's on your cl
 
 ### Names stay current
 
-Every name the current remote folder holds is a link, also right after a command creates or renames it: after each command the terminal lists the folder again (once, shortly after the prompt returns; very big folders only when they changed). So `touch notes.md`, `mv a b` or `tar xf release.tgz` give you clickable names without a `cd`. Names printed before a `cd` into another folder aren't links any more; run `ls` again there.
+Every name the current remote folder holds is a link, also right after a command creates or renames it: after each command the terminal lists the folder again (once, shortly after the prompt returns; very big folders only when they changed). So `touch notes.md`, `mv a b` or `tar xf release.tgz` give you clickable names without a `cd`. After you change to another folder, names printed in the old one aren't links any more; run `ls` again.
 
 VS Code can keep a link under a pointer that hasn't moved while the text below it changes, for example after `clear && ls`. Easy SSH checks the row when you click: if a different name is there now, the menu is for that name; if it can't tell, it asks you to move the pointer off the name and click again.
 
