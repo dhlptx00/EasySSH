@@ -1,4 +1,4 @@
-import { humanizeSshError } from './ssh/errors';
+import { humanizeSshError, sftpCode } from './ssh/errors';
 import { remoteBasename } from './remotePath';
 import type { RemoteStat, RemoveOptions } from './terminal/host';
 import { formatSize } from './text';
@@ -64,11 +64,6 @@ export function overwriteText(question: OverwriteQuestion): { message: string; d
       `On the server now: ${formatSize(question.now.size)}, modified ${when(question.now.mtime)}\n\n` +
       'Overwriting replaces the changes made on the server.',
   };
-}
-
-function sftpCode(err: unknown): number | string | undefined {
-  const code = (err as { code?: unknown })?.code;
-  return typeof code === 'number' || typeof code === 'string' ? code : undefined;
 }
 
 /** Turn an SFTP or connection error into one an editor understands. */

@@ -25,7 +25,7 @@ interface OpenFile {
 
 const TYPE_BITS: Record<Kind, number> = { file: 0o100000, dir: 0o040000, link: 0o120000, other: 0o010000 };
 
-function sftpError(code: number, message: string): Error {
+export function sftpError(code: number, message: string): Error {
   return Object.assign(new Error(message), { code });
 }
 

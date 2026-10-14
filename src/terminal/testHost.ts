@@ -1,4 +1,5 @@
 import { remoteBasename, remoteDirname, remoteJoin } from '../remotePath';
+import { sftpError } from '../ssh/testSftp';
 import type { BrowseEntry, ConflictChoice, ConnectionRecord, TransferProgress, UploadOptions } from '../types';
 import type { UploadQuestion } from './cwdTracking';
 import type { AppHost, FileSession } from './host';
@@ -149,10 +150,6 @@ export async function flush(): Promise<void> {
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function sftpError(code: number, message: string): Error {
-  return Object.assign(new Error(message), { code });
 }
 
 function treeList(tree: Record<string, BrowseEntry[] | 'denied'>, dir: string): BrowseEntry[] {
