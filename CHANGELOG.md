@@ -4,6 +4,17 @@ All notable changes to Easy SSH. Dates are in UTC+8.
 
 If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh&ssr=false#review-details) or [Open VSX](https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews) helps others find it.
 
+## [0.4.3] - 2026-10-14
+
+### Fixed
+
+- New connection: the Host step accepts what you'd type after `ssh`, such as `deploy@10.0.4.12:2222` or `[fe80::1]:2200`, and fills in User and Port from it. Before, the whole text was saved as the host name and the connection could not work.
+
+### Changed
+
+- A smaller, faster-loading extension: the bundle leaves out ssh2's SSH server and key generator, which Easy SSH never uses, and targets the Node.js version that VS Code 1.74 ships.
+- README brought in line with current behaviour.
+
 ## [0.4.2] - 2026-10-07
 
 ### Added
@@ -174,6 +185,7 @@ If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace
 - Open a remote directory, click a file to download it, and drop local files to upload them.
 - Connect with a password, a private key, or an SSH agent, including one or more jump hosts.
 
+[0.4.3]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.3
 [0.4.2]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.2
 [0.4.1]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.1
 [0.4.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.0
