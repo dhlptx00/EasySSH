@@ -315,9 +315,6 @@ describe('real sshd', { skip }, () => {
 
   it('creates a folder, changes modes, and forwards a local port through the server', async () => {
     const opened = await connect('esit_bash');
-    const echo = net.createServer((socket) => socket.pipe(socket));
-    await new Promise<void>((resolve) => echo.listen(0, '127.0.0.1', resolve));
-    const echoPort = (echo.address() as net.AddressInfo).port;
     try {
       const base = `${opened.cwd}/modes-${randomBytes(4).toString('hex')}`;
       await opened.session.makeDir(base);
@@ -332,18 +329,19 @@ describe('real sshd', { skip }, () => {
           probe.close(() => resolve(port));
         });
       });
-      // The test sshd runs on this machine, so the server's localhost is ours.
-      await opened.session.forward({ localPort: local, remoteHost: '127.0.0.1', remotePort: echoPort }, () => {});
-      await assert.rejects(opened.session.forward({ localPort: local, remoteHost: '127.0.0.1', remotePort: echoPort }, () => {}), /already forwarded/);
-      const reply = await new Promise<string>((resolve, reject) => {
-        const client = net.connect(local, '127.0.0.1', () => client.write('through-ssh'));
+      // Forward to the server's own sshd, as the server sees it: it greets with its banner.
+      const spec = { localPort: local, remoteHost: '127.0.0.1', remotePort: INNER_PORT };
+      await opened.session.forward(spec, () => {});
+      await assert.rejects(opened.session.forward(spec, () => {}), /already forwarded/);
+      const banner = await new Promise<string>((resolve, reject) => {
+        const client = net.connect(local, '127.0.0.1');
         client.on('data', (data) => {
           resolve(data.toString());
-          client.end();
+          client.destroy();
         });
         client.on('error', reject);
       });
-      assert.equal(reply, 'through-ssh');
+      assert.match(banner, /^SSH-2\.0-/);
       assert.equal(opened.session.unforward(local), true);
       await assert.rejects(new Promise((resolve, reject) => {
         const again = net.connect(local, '127.0.0.1', () => resolve(again.end()));
@@ -352,7 +350,6 @@ describe('real sshd', { skip }, () => {
       await opened.session.remove(base, { signal: new AbortController().signal });
     } finally {
       opened.session.close();
-      echo.close();
     }
   });
 
