@@ -109,7 +109,9 @@ export function loadSshConfig(
     if (seen.has(real)) return;
     seen.add(real);
     const parsed = parseSshConfig(fs.readFileSync(file, 'utf8'));
-    hosts.push(...parsed.hosts);
+    // Hosts of an included file (config.d/work.conf) are grouped under its name ("work").
+    const group = depth > 0 ? path.parse(file).name : undefined;
+    hosts.push(...parsed.hosts.map((host) => (group ? { ...host, file: group } : host)));
     for (const pattern of parsed.includes) {
       const full = resolveInclude(pattern, sshDir);
       for (const match of expandGlob(full)) visit(match, depth + 1);

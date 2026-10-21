@@ -115,4 +115,25 @@ describe('ssh config import', () => {
     assert.deepEqual(changed, ['host']);
     assert.deepEqual(mergeImported(record, imported).changed, []);
   });
+
+  it('imports LocalForward lines and groups hosts by their included file', () => {
+    const hosts = [
+      ...parseSshConfig('Host web\n  LocalForward 3000 localhost:3000\n  LocalForward 127.0.0.1:5432 db:5432\nHost *\n  LocalForward 3000 other:1\n').hosts,
+      ...parseSshConfig('Host build\n  HostName 10.0.0.9\n').hosts.map((host) => ({ ...host, file: 'work' })),
+    ];
+    const { connections } = connectionsFromHosts(hosts, 'me', '/home/me');
+    const web = connections.find((item) => item.name === 'web');
+    assert.deepEqual(web?.forwards, [
+      { localPort: 3000, remoteHost: 'localhost', remotePort: 3000 },
+      { localPort: 5432, remoteHost: 'db', remotePort: 5432 },
+    ]);
+    assert.equal(web?.group, undefined);
+    assert.equal(connections.find((item) => item.name === 'build')?.group, 'work');
+
+    const existing: ConnectionRecord = { id: 'w', name: 'web', host: 'web', port: 22, username: 'me', auth: 'agent', jumps: [], group: 'mine' };
+    const merged = mergeImported(existing, { ...web!, group: 'work' });
+    assert.deepEqual(merged.record.forwards, web?.forwards);
+    assert.equal(merged.record.group, 'mine', 'a group set by hand stays');
+    assert.ok(merged.changed.includes('forwards'));
+  });
 });

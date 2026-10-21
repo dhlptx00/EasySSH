@@ -39,6 +39,8 @@ interface Script {
   chooses?: (string | undefined)[];
   /** openRemoteFile fails with this message. */
   openFails?: string;
+  /** Offer New Folder, Permissions and Copy Path, answering input boxes with these. */
+  texts?: (string | undefined)[];
 }
 
 interface Rig {
@@ -59,6 +61,10 @@ interface Rig {
   chosen: { message: string; detail: string; answers: string[] }[];
   sniffed: string[];
   script: Script;
+  made: string[];
+  modes: [string, number][];
+  copied: string[];
+  asked: { prompt: string; value?: string; problems: (string | undefined)[] }[];
 }
 
 async function rig(script: Script = {}, options: { count?: TreeCount; existing?: string[] } = {}): Promise<Rig> {
@@ -81,6 +87,10 @@ async function rig(script: Script = {}, options: { count?: TreeCount; existing?:
     chosen: [],
     sniffed: [],
     script,
+    made: [],
+    modes: [],
+    copied: [],
+    asked: [],
   };
   const session = remote.session;
   session.list = async (dir) => (dir === HOME ? entries : [entries[1]]);
@@ -150,6 +160,24 @@ async function rig(script: Script = {}, options: { count?: TreeCount; existing?:
       return chooses.shift();
     },
   };
+  if (script.texts) {
+    const texts = [...script.texts];
+    session.stat = async () => ({ kind: 'file', size: 10, mtime: 0, mode: 0o100640 });
+    session.makeDir = async (path) => {
+      state.made.push(path);
+    };
+    session.chmod = async (path, mode) => {
+      state.modes.push([path, mode]);
+    };
+    host.copyText = async (text) => {
+      state.copied.push(text);
+    };
+    host.askText = async (request) => {
+      const problems = await Promise.all(['', 'logs', 'new', '75', '0755'].map(async (value) => request.validate?.(value)));
+      state.asked.push({ prompt: request.prompt, value: request.value, problems });
+      return texts.shift();
+    };
+  }
   const app = new EasySshApp(host, () => {});
   app.setSize(100, 30);
   app.open();
@@ -385,6 +413,51 @@ describe('Delete from the menu', () => {
     assert.equal(r.confirms[0].message, 'Delete file "notes.txt"?');
     assert.deepEqual(r.removed, [`${HOME}/notes.txt`]);
     assert.deepEqual(r.remote.notes.at(-1), { tone: 'info', text: 'Deleted file "notes.txt"' });
+    r.app.dispose();
+  });
+});
+
+describe('New Folder, Permissions and Copy Path', () => {
+  it('offers them where they apply', async () => {
+    const r = await rig({ texts: [] });
+    await click(r, `${HOME}/logs`);
+    await click(r, `${HOME}/notes.txt`);
+    assert.deepEqual(r.menus.map((menu) => menu.items.map((item) => item.action ?? '---')), [
+      ['download', 'upload', '---', 'rename', 'newFolder', 'chmod', 'copyPath', '---', 'delete'],
+      ['download', 'open', '---', 'rename', 'chmod', 'copyPath', '---', 'delete'],
+    ]);
+    r.app.dispose();
+  });
+
+  it('creates a folder inside the clicked folder, refusing names that exist', async () => {
+    const r = await rig({ pick: 'newFolder', texts: ['new'] }, { existing: [`${HOME}/logs/logs`] });
+    await click(r, `${HOME}/logs`);
+    assert.deepEqual(r.made, [`${HOME}/logs/new`]);
+    assert.deepEqual(r.asked[0].problems.slice(0, 3), ['Enter a name', `"logs" already exists in ${HOME}/logs`, undefined]);
+    assert.ok(r.remote.notes.some((note) => note.text === `Created folder "new" in ${HOME}/logs`));
+    r.app.dispose();
+  });
+
+  it('changes permissions from the current mode, accepting only octal digits', async () => {
+    const r = await rig({ pick: 'chmod', texts: ['600'] });
+    await click(r, `${HOME}/notes.txt`);
+    assert.equal(r.asked[0].value, '640');
+    assert.match(r.asked[0].prompt, /^Now 640\./);
+    assert.deepEqual(r.asked[0].problems.slice(3), ['Type 3 or 4 octal digits, e.g. 644', undefined]);
+    assert.deepEqual(r.modes, [[`${HOME}/notes.txt`, 0o600]]);
+    r.app.dispose();
+
+    const cancelled = await rig({ pick: 'chmod', texts: [undefined] });
+    await click(cancelled, `${HOME}/notes.txt`);
+    assert.deepEqual(cancelled.modes, []);
+    cancelled.app.dispose();
+  });
+
+  it('copies the full path', async () => {
+    const r = await rig({ pick: 'copyPath', texts: [] });
+    await click(r, `${HOME}/notes.txt`);
+    assert.deepEqual(r.copied, [`${HOME}/notes.txt`]);
+    assert.ok(r.remote.status.includes(`Copied ${HOME}/notes.txt`));
     r.app.dispose();
   });
 });

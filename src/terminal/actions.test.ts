@@ -4,7 +4,9 @@ import {
   actionMenu,
   actionTitle,
   deleteQuestion,
+  formatMode,
   onlyActions,
+  parseMode,
   renameProblem,
   renameQuestion,
   renameSelection,
@@ -23,8 +25,8 @@ describe('action menu', () => {
   it('lists Download first, then Open, Rename, and Delete last under a separator, for a file (no Upload)', () => {
     const menu = actionMenu(file, { downloadLabel: '~/Downloads' });
     assert.equal(menu.title, 'report.log — /var/log/app');
-    assert.deepEqual(menu.items.map((item) => item.action ?? '---'), ['download', 'open', '---', 'rename', '---', 'delete']);
-    assert.deepEqual(menu.items.filter((item) => !item.separator).map((item) => item.icon), ['cloud-download', 'go-to-file', 'pencil', 'trash']);
+    assert.deepEqual(menu.items.map((item) => item.action ?? '---'), ['download', 'open', '---', 'rename', 'chmod', 'copyPath', '---', 'delete']);
+    assert.deepEqual(menu.items.filter((item) => !item.separator).map((item) => item.icon), ['cloud-download', 'go-to-file', 'pencil', 'lock', 'copy', 'trash']);
     assert.ok(menu.items.every((item) => item.separator || item.description), 'every action says what it does');
     assert.match(menu.items[0].description ?? '', /~\/Downloads/);
     assert.match(menu.placeholder, /^File · 48 MB/);
@@ -33,11 +35,21 @@ describe('action menu', () => {
   it('has Upload but no Open for a folder, and uploads into the folder itself', () => {
     const menu = actionMenu(folder, { downloadLabel: '~/Downloads', items: 'counting' });
     assert.equal(menu.title, 'logs — /home/demo/project');
-    assert.deepEqual(menu.items.map((item) => item.action ?? '---'), ['download', 'upload', '---', 'rename', '---', 'delete']);
+    assert.deepEqual(menu.items.map((item) => item.action ?? '---'), ['download', 'upload', '---', 'rename', 'newFolder', 'chmod', 'copyPath', '---', 'delete']);
     assert.match(menu.items[1].description ?? '', /into \/home\/demo\/project\/logs$/);
     assert.match(menu.placeholder, /^Folder · counting items…/);
     assert.equal(uploadDir(folder), '/home/demo/project/logs');
     assert.equal(uploadDir(file), '/var/log/app');
+  });
+
+  it('reads chmod modes as 3 or 4 octal digits and shows only the permission bits', () => {
+    assert.equal(parseMode('755'), 0o755);
+    assert.equal(parseMode(' 0644 '), 0o644);
+    assert.equal(parseMode('4755'), 0o4755);
+    for (const bad of ['', '75', '888', '12345', 'rwx', '7a5']) assert.equal(parseMode(bad), undefined, bad);
+    assert.equal(formatMode(0o100644), '644');
+    assert.equal(formatMode(0o40755), '755');
+    assert.equal(formatMode(0o1777), '1777');
   });
 
   it('summarizes size, item count and the modified time', () => {

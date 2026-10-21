@@ -96,4 +96,20 @@ describe('connection store', () => {
     assert.deepEqual(answers, [false, false, false, false, true, false, false, false]);
     assert.equal(backing.state.get('easySsh.ratingPrompt'), 'done');
   });
+
+  it('keeps a group, valid forwards and snippets, and drops broken ones', async () => {
+    const backing = memory();
+    const store = new ConnectionStore(backing.state, backing.secrets);
+    await backing.state.update('easySsh.connections', [{
+      id: '1', name: 'prod', host: 'h', port: 22, username: 'u', auth: 'agent', jumps: [],
+      group: 'work',
+      forwards: [{ localPort: 3000, remoteHost: 'localhost', remotePort: 3000 }, { localPort: 0, remoteHost: 'x', remotePort: 1 }, 'bad'],
+      snippets: ['df -h', '', 7],
+    }, { id: '2', name: 'b', host: 'h', port: 22, username: 'u', auth: 'agent', jumps: [], group: ' ', forwards: [], snippets: [] }]);
+    const [first, second] = await store.list();
+    assert.equal(first.group, 'work');
+    assert.deepEqual(first.forwards, [{ localPort: 3000, remoteHost: 'localhost', remotePort: 3000 }]);
+    assert.deepEqual(first.snippets, ['df -h']);
+    assert.deepEqual(second, { id: '2', name: 'b', host: 'h', port: 22, username: 'u', auth: 'agent', jumps: [] });
+  });
 });

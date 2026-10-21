@@ -22,6 +22,8 @@ export interface SlashTarget {
   id: string;
   name: string;
   description: string;
+  /** More text a query may match anywhere in, e.g. "deploy@10.0.0.5 work". */
+  search?: string;
 }
 
 /** System commands shown in the slash picker, in menu order. */
@@ -85,10 +87,13 @@ export function matchSlashCommands(input: string, targets: SlashTarget[] = []): 
     group: 'connection',
     connectionId: target.id,
   }));
+  const system = systemMatches(query);
+  // Host, user and group text is searched too, unless the query could still become a command (/e, /imp).
+  const searched = query.length >= 2 && system.length === 0;
   const connectionMatches = query
-    ? connections.filter((command) => command.name.toLowerCase().startsWith(query))
+    ? connections.filter((command, index) => command.name.toLowerCase().startsWith(query) || (searched && (targets[index].search ?? '').toLowerCase().includes(query)))
     : connections;
-  return [...connectionMatches, ...systemMatches(query)];
+  return [...connectionMatches, ...system];
 }
 
 function systemMatches(query: string): SlashCommand[] {
@@ -141,5 +146,32 @@ export function parseConnectionCommand(input: string): ConnectionAction {
       return { type: 'help' };
     default:
       return { type: 'unknown', text };
+  }
+}
+
+/** A command typed at the remote shell prompt that Easy SSH runs instead of the shell. */
+export type SessionCommand =
+  | { type: 'run' }
+  | { type: 'save'; command: string }
+  | { type: 'forward'; spec: string }
+  | { type: 'unforward'; port: string };
+
+/**
+ * `/run`, `/save [command]`, `/forward [spec]` and `/unforward port` on the shell
+ * prompt. No real command starts with these, so anything else goes to the shell.
+ */
+export function parseSessionCommand(line: string): SessionCommand | undefined {
+  const match = /^\s*\/(run|save|forward|unforward)(?:\s+(.*?))?\s*$/.exec(line);
+  if (!match) return undefined;
+  const rest = match[2] ?? '';
+  switch (match[1]) {
+    case 'run':
+      return rest ? undefined : { type: 'run' };
+    case 'save':
+      return { type: 'save', command: rest };
+    case 'forward':
+      return { type: 'forward', spec: rest };
+    default:
+      return { type: 'unforward', port: rest };
   }
 }

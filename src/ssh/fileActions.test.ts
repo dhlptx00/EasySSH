@@ -73,7 +73,7 @@ describe('file actions over SFTP', () => {
   it('stats a path and downloads to the exact path picked, replacing a file there', async () => {
     const session = sessionOf(tree());
     const found = await session.stat('/home/demo/project/notes.txt');
-    assert.deepEqual(found, { kind: 'file', size: 5, mtime: 1_700_000_000_000 });
+    assert.deepEqual(found, { kind: 'file', size: 5, mtime: 1_700_000_000_000, mode: 0o100644 });
     assert.equal((await session.stat('/home/demo/project/logs')).kind, 'dir');
     const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'easyssh-actions-'));
     try {

@@ -1,4 +1,4 @@
-import type { ConnectionRecord, SecretPayload, SecretUpdate } from './types';
+import type { ConnectionRecord, ForwardSpec, SecretPayload, SecretUpdate } from './types';
 
 export interface StateStore {
   get<T>(key: string): T | undefined;
@@ -36,10 +36,23 @@ function isRecord(value: unknown): value is ConnectionRecord {
   );
 }
 
+function isForward(value: unknown): value is ForwardSpec {
+  const spec = value as ForwardSpec;
+  const port = (item: unknown) => Number.isInteger(item) && (item as number) >= 1 && (item as number) <= 65535;
+  return Boolean(spec && typeof spec === 'object' && port(spec.localPort) && port(spec.remotePort) && typeof spec.remoteHost === 'string' && spec.remoteHost);
+}
+
 /** Drop unknown fields and fix types of a stored record. */
 function cleanRecord(record: ConnectionRecord): ConnectionRecord {
   const clean: ConnectionRecord = { ...record, jumps: record.jumps ?? [] };
   if (record.askPassword !== true) delete clean.askPassword;
+  if (typeof record.group !== 'string' || !record.group.trim()) delete clean.group;
+  const forwards = Array.isArray(record.forwards) ? record.forwards.filter(isForward) : [];
+  if (forwards.length) clean.forwards = forwards;
+  else delete clean.forwards;
+  const snippets = Array.isArray(record.snippets) ? record.snippets.filter((item) => typeof item === 'string' && item.trim() !== '') : [];
+  if (snippets.length) clean.snippets = snippets;
+  else delete clean.snippets;
   return clean;
 }
 

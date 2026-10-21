@@ -1,6 +1,8 @@
 export interface ParsedHost {
   patterns: string[];
   values: Record<string, string[]>;
+  /** The name of the included file it came from. Unset in ~/.ssh/config itself. */
+  file?: string;
 }
 
 export interface ParsedConfig {

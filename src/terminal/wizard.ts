@@ -1,3 +1,4 @@
+import { formatForward, parseForwardList } from '../ssh/forward';
 import { formatJumps, parseJumpList } from '../ssh/jump';
 import { authWord, expandHome } from '../text';
 import type { AuthMethod, ConnectionRecord, JumpSpec, SecretUpdate } from '../types';
@@ -16,7 +17,9 @@ export type Step =
   | 'startPathChoice'
   | 'startPath'
   | 'jumpChoice'
-  | 'jump';
+  | 'jump'
+  | 'forwards'
+  | 'group';
 
 export interface Draft {
   name: string;
@@ -43,6 +46,11 @@ export interface Draft {
   originalJumps: JumpSpec[];
   originalKeyPath: string;
   originalAuth: AuthMethod | '';
+  /** Ports forwarded at every connect, as typed: "3000, 8080:db:5432". */
+  forwards: string;
+  group: string;
+  /** Saved /run commands, carried through an edit. */
+  snippets: string[];
 }
 
 export interface Prompt {
@@ -75,6 +83,9 @@ export function emptyDraft(): Draft {
     originalJumps: [],
     originalKeyPath: '',
     originalAuth: '',
+    forwards: '',
+    group: '',
+    snippets: [],
   };
 }
 
@@ -104,6 +115,9 @@ export function draftFromRecord(
     originalJumps: record.jumps.map((item) => ({ ...item })),
     originalKeyPath: record.privateKeyPath ?? '',
     originalAuth: record.auth,
+    forwards: (record.forwards ?? []).map(formatForward).join(', '),
+    group: record.group ?? '',
+    snippets: [...(record.snippets ?? [])],
   };
 }
 
@@ -136,6 +150,10 @@ export function nextStep(step: Step, draft: Draft): Step | 'done' {
     case 'jumpChoice':
       return draft.jumpMode === 'custom' ? 'jump' : 'done';
     case 'jump':
+      return 'done';
+    // Optional fields: /new skips them, and the summary opens them one at a time.
+    case 'forwards':
+    case 'group':
       return 'done';
     default: {
       const unreachable: never = step;
@@ -176,6 +194,9 @@ export function prevStep(step: Step, draft: Draft): Step | 'start' {
       return 'auth';
     case 'jump':
       return 'jumpChoice';
+    case 'forwards':
+    case 'group':
+      return draft.jumpMode === 'custom' ? 'jump' : 'jumpChoice';
     default: {
       const unreachable: never = step;
       return unreachable;
@@ -252,6 +273,15 @@ export function promptFor(step: Step, draft: Draft): Prompt {
         masked: false,
         fallback: draft.jump,
       };
+    case 'forwards':
+      return {
+        label: 'forward ports',
+        hint: 'Optional. 3000 forwards localhost:3000 to port 3000 on the server; also 8080:3000 or 5432:db.internal:5432, comma separated. none clears',
+        masked: false,
+        fallback: draft.forwards,
+      };
+    case 'group':
+      return { label: 'group', hint: 'Optional. A heading on the home list, e.g. work. none clears', masked: false, fallback: draft.group };
     default: {
       const unreachable: never = step;
       return unreachable;
@@ -288,6 +318,10 @@ export function stepValue(step: Step, draft: Draft): string {
       return draft.jumpMode === 'custom' ? 'Jump host' : 'No jump host';
     case 'jump':
       return draft.jump || '(none)';
+    case 'forwards':
+      return draft.forwards || '(none)';
+    case 'group':
+      return draft.group || '(none)';
     default: {
       const unreachable: never = step;
       return unreachable;
@@ -476,6 +510,22 @@ export function applyStep(step: Step, typed: string, draft: Draft, ctx: ApplyCon
     return { draft: next };
   }
 
+  if (step === 'forwards' || step === 'group') {
+    const text = value.trim();
+    const cleared = text === 'none' || text === '-' ? '' : text;
+    if (step === 'group') {
+      if (cleared.length > 32) return { draft, error: 'Group must be 32 characters or fewer' };
+      next.group = cleared;
+      return { draft: next };
+    }
+    try {
+      next.forwards = parseForwardList(cleared).map(formatForward).join(', ');
+    } catch (err) {
+      return { draft, error: err instanceof Error ? err.message : 'Forward is invalid' };
+    }
+    return { draft: next };
+  }
+
   const jumpText = typed.trim();
   if (jumpText === 'none' || jumpText === '-') {
     next.jump = '';
@@ -533,6 +583,10 @@ export function toConnection(draft: Draft, id: string): { record: ConnectionReco
     jumps: jumpsFor(draft),
   };
   if (askPassword) record.askPassword = true;
+  const forwards = parseForwardList(draft.forwards);
+  if (forwards.length) record.forwards = forwards;
+  if (draft.group) record.group = draft.group;
+  if (draft.snippets.length) record.snippets = [...draft.snippets];
 
   let secret: SecretUpdate;
   if (draft.auth === 'agent' || askPassword) secret = { action: 'clear' };
@@ -547,9 +601,9 @@ export function toConnection(draft: Draft, id: string): { record: ConnectionReco
 }
 
 /** The fields of a connection, as listed on the summary and the /edit picker. */
-export type Field = 'name' | 'host' | 'port' | 'username' | 'auth' | 'jump';
+export type Field = 'name' | 'host' | 'port' | 'username' | 'auth' | 'jump' | 'forwards' | 'group';
 
-export const FIELDS: Field[] = ['name', 'host', 'port', 'username', 'auth', 'jump'];
+export const FIELDS: Field[] = ['name', 'host', 'port', 'username', 'auth', 'jump', 'forwards', 'group'];
 
 export function fieldTitle(field: Field): string {
   switch (field) {
@@ -565,6 +619,10 @@ export function fieldTitle(field: Field): string {
       return 'Sign-in';
     case 'jump':
       return 'Jump host';
+    case 'forwards':
+      return 'Forward ports';
+    case 'group':
+      return 'Group';
     default: {
       const unreachable: never = field;
       return unreachable;
@@ -579,6 +637,8 @@ export function fieldOf(step: Step): Field {
     case 'host':
     case 'port':
     case 'username':
+    case 'forwards':
+    case 'group':
       return step;
     case 'jumpChoice':
     case 'jump':
@@ -641,6 +701,10 @@ export function stepTitle(step: Step): string {
       return 'Jump host';
     case 'jump':
       return 'Jump hosts';
+    case 'forwards':
+      return 'Forward ports';
+    case 'group':
+      return 'Group';
     default: {
       const unreachable: never = step;
       return unreachable;
@@ -696,6 +760,10 @@ export function fieldValue(field: Field, draft: Draft, home = ''): string {
     }
     case 'jump':
       return draft.jumpMode === 'custom' && draft.jump.trim() ? draft.jump : 'None, direct connection';
+    case 'forwards':
+      return draft.forwards || 'None';
+    case 'group':
+      return draft.group || 'None';
     default: {
       const unreachable: never = field;
       return unreachable;
@@ -724,6 +792,11 @@ export function sshCommand(draft: Draft, home = ''): string {
     } catch {
       parts.push('-J', quoteArg(draft.jump.trim()));
     }
+  }
+  try {
+    for (const spec of parseForwardList(draft.forwards)) parts.push('-L', `${spec.localPort}:${sshHost(spec.remoteHost)}:${spec.remotePort}`);
+  } catch {
+    // Checked when typed.
   }
   parts.push(`${draft.username ? `${draft.username}@` : ''}${sshHost(draft.host)}`);
   return parts.join(' ');

@@ -8,6 +8,13 @@ export interface JumpSpec {
   privateKeyPath?: string;
 }
 
+/** A local port carried through the SSH server, like `ssh -L localPort:remoteHost:remotePort`. */
+export interface ForwardSpec {
+  localPort: number;
+  remoteHost: string;
+  remotePort: number;
+}
+
 export interface ConnectionRecord {
   id: string;
   name: string;
@@ -21,6 +28,12 @@ export interface ConnectionRecord {
   jumps: JumpSpec[];
   /** True to ask for the password at every connect instead of saving it. */
   askPassword?: boolean;
+  /** A heading the home list sorts this connection under. */
+  group?: string;
+  /** Ports forwarded at every connect. */
+  forwards?: ForwardSpec[];
+  /** Saved commands for /run, in the order they were saved. */
+  snippets?: string[];
 }
 
 export interface SecretPayload {

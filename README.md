@@ -6,7 +6,7 @@
 [![CI](https://github.com/dhlptx00/EasySSH/actions/workflows/ci.yml/badge.svg)](https://github.com/dhlptx00/EasySSH/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/dhlptx00/EasySSH)](LICENSE)
 
-An SSH client in a terminal tab of VS Code, Cursor and other VS Code-based editors. Save your hosts, hop through jump hosts, import `~/.ssh/config`, Ctrl+click a file or folder name to download, open, rename or delete it, and drag files onto the terminal to upload them.
+An SSH client in a terminal tab of VS Code, Cursor and other VS Code-based editors. Save and group your hosts, hop through jump hosts, forward ports, import `~/.ssh/config`, keep commands you run often, Ctrl+click a file or folder name to download, open, rename, chmod or delete it, and drag files onto the terminal to upload them.
 
 Easy SSH talks SSH directly from your editor. **Nothing is installed on the server**, and no remote editor server is downloaded, so it works on old, small, and locked-down machines where Remote-SSH can't run.
 
@@ -27,10 +27,13 @@ Easy SSH talks SSH directly from your editor. **Nothing is installed on the serv
 - Pick a connection from a **home screen** that shows your most recent connection, a table with sign-in method and last use, and the details of the selected host
 - Add connections with a **guided `/new` setup**: one field per step with checks, the matching `ssh` command, and **Test connection** before you save. `/edit` changes one field at a time, `/delete` asks first
 - Sign in with a password (saved, or asked every time), a private key, an SSH agent or Pageant. Two-factor prompts are shown in the terminal
+- **Group connections** under headings, and find one by typing part of its name, host, user or group
 - Hop through one or more jump hosts
-- Import hosts from `~/.ssh/config`, including `Host *` defaults and `ProxyJump` chains
+- **Forward local ports** through the server (like `ssh -L`): saved per connection, or added with `/forward` while connected
+- Import hosts from `~/.ssh/config`, including `Host *` defaults, `ProxyJump` chains and `LocalForward`
+- **Save commands** you run often with `/save` and run them again with `/run`
 - Open your remote login shell (bash, zsh, fish and others) and use it exactly as over `ssh`, including `vim`, `top` and `sudo`
-- **Ctrl+click a file or folder name** (Cmd+click on macOS) for its action menu. Files: **Download**, **Open**, **Rename**, **Delete**. Folders: **Download**, **Upload**, **Rename**, **Delete**
+- **Ctrl+click a file or folder name** (Cmd+click on macOS) for its action menu. Files: **Download**, **Open**, **Rename**, **Permissions**, **Copy Path**, **Delete**. Folders also get **Upload** and **New Folder**
 - **Open a remote text file in a VS Code editor tab** and save it back to the server with Ctrl+S (Cmd+S). Permissions are kept, and saving warns you if the file changed on the server in the meantime
 - **Download a folder** with everything in it, the same way
 - **Upload:** drag files or folders onto the terminal. They go into the current remote folder
@@ -48,6 +51,7 @@ Easy SSH talks SSH directly from your editor. **Nothing is installed on the serv
 - **Downloads and uploads need SFTP.** On a server without SFTP you still get the terminal, but no file transfers.
 - **Folder tracking needs bash, zsh or fish.** In these shells the terminal follows `cd`, so clicks and drops use the right folder. Other shells work, but names aren't linked until Easy SSH knows the folder.
 - After `sudo su`, `su` or a nested `ssh`, Easy SSH follows the `cd` commands it can see. Transfers still run as the user you signed in as.
+- Port forwarding is local only (`ssh -L`), and the server must allow TCP forwarding (OpenSSH's default). Forwarded ports listen on `127.0.0.1` only.
 - `ProxyCommand` isn't supported. Imported hosts that need it are listed and skipped; use `ProxyJump` instead.
 - A single upload or folder download is limited to 5000 files (`easySsh.maxTransferFiles`).
 
@@ -59,15 +63,15 @@ Click the **Easy SSH** icon in the activity bar, or run **Easy SSH: New Terminal
 
 *The connection list. Up and Down select a connection, Enter connects.*
 
-The list shows each connection's user@host:port, sign-in method (key, password, agent, and the jump host it goes through) and when you last used it. The **Last:** line under the Easy SSH mark names the connection you used most recently; the list starts on it, so Enter reconnects. When there is room, the selected connection's details (host, port, sign-in, jump host, last used, start folder) show under the list. The key hints sit at the bottom, and the prompt shows a different tip each time. With no connections yet, a **Getting started** box points to `/new` and `/import`.
+Connections with a **group** are listed under its heading, with the number of connections in it; the rest come first. The list shows each connection's user@host:port, sign-in method (key, password, agent, and the jump host it goes through) and when you last used it. The **Last:** line under the Easy SSH mark names the connection you used most recently; the list starts on it, so Enter reconnects. When there is room, the selected connection's details (host, port, sign-in, jump host, last used, start folder) show under the list. The key hints sit at the bottom, and the prompt shows a different tip each time. With no connections yet, a **Getting started** box points to `/new` and `/import`.
 
 ## Commands
 
-On the connection panel, type `/` to open the command list. Connections and system commands are listed in separate groups. Up and Down move through the list, further typing filters it, and Enter runs the highlighted row.
+On the connection panel, type `/` to open the command list. Connections and system commands are listed in separate groups. Up and Down move through the list, further typing filters it, and Enter runs the highlighted row. Typing also searches: `/10.0.4`, `/deploy@` or `/work` finds connections by host, user or group, not only by name (unless what you typed is the start of a command, such as `/ed`).
 
 | Command | Action |
 | --- | --- |
-| /name | Connect to the saved connection with that name |
+| /name | Connect to the saved connection with that name (or find it by host, user or group) |
 | /new | New connection |
 | /edit | Choose a connection, then edit it |
 | /delete | Choose a connection, then delete it |
@@ -93,7 +97,7 @@ On the connection panel, type `/` to open the command list. Connections and syst
 
 *The last page of `/new`: the values, the matching `ssh` command, and Test connection.*
 
-`/edit` opens the same page for a saved connection: pick the field to change, then Save. `/delete` asks in red, with the connection's name and host, before anything is removed.
+`/edit` opens the same page for a saved connection: pick the field to change, then Save. Two optional fields are set from this page only, so `/new` stays short: **Forward ports** (see [Port forwarding](#port-forwarding)) and **Group**, the heading the connection is listed under. Type `none` to clear either. `/delete` asks in red, with the connection's name and host, before anything is removed.
 
 Passwords and key passphrases are hidden while you type and never shown afterwards. Press Enter on a saved secret to keep it. Sign-in method and jump host are choices: move with Up and Down, then press Enter. For a custom jump host, type `user@host:port`, and separate extra hops with commas.
 
@@ -117,6 +121,21 @@ A connection opens your login shell in the home folder (or in the connection's s
 
 *A remote login shell, the same as over `ssh`.*
 
+### Commands at the shell prompt
+
+Four commands work at the remote shell prompt. Easy SSH takes the line when you press Enter, clears it in the shell, and nothing is sent to the server. Any other line, including paths such as `/usr/bin/env`, goes to the shell as usual.
+
+| Command | Action |
+| --- | --- |
+| `/save` | Save a command for this connection. It offers the last line you typed, so you can check or change it first |
+| `/save <command>` | Save that command, e.g. `/save tail -f /var/log/nginx/error.log` |
+| `/run` | Pick a saved command; Enter types it at the prompt and runs it. **Remove a saved command…** at the end of the list removes one |
+| `/forward` | Show the forwarded ports |
+| `/forward <ports>` | Forward a port for this session, e.g. `/forward 3000` or `/forward 8080:db.internal:80` |
+| `/unforward <port>` | Stop forwarding a local port |
+
+Saved commands are stored with the connection, next to its host and user, and never include passwords.
+
 ### Ctrl+click a name: the action menu
 
 Ctrl+click a file or folder name in the remote shell (Cmd+click on macOS) to open a menu of what you can do with it. Its title shows the name and the folder it's in, for example `access.log — /home/deploy/logs`, and its placeholder the size or the number of items. **Download** is first, so Enter downloads.
@@ -124,7 +143,7 @@ Ctrl+click a file or folder name in the remote shell (Cmd+click on macOS) to ope
 | A folder | A text file |
 | --- | --- |
 | ![The action menu for the folder logs: Download, Upload, Rename, Delete](media/readme/08-folder-action-menu.png) | ![The action menu for the text file access.log: Download, Open, Rename, Delete](media/readme/09-file-action-menu.png) |
-| Download, Upload, Rename, Delete | Download, Open, Rename, Delete |
+| Download, Upload, Rename, New Folder, Permissions, Copy Path, Delete | Download, Open, Rename, Permissions, Copy Path, Delete |
 
 | Action | Files | Folders | What it does |
 | --- | --- | --- | --- |
@@ -132,9 +151,12 @@ Ctrl+click a file or folder name in the remote shell (Cmd+click on macOS) to ope
 | Upload… | | ✓ | Opens a file picker titled with the target, e.g. `Upload to /home/demo/project/logs`, and uploads into the clicked folder with a progress notification. Existing names ask first. To upload into the current folder, drop files on the terminal |
 | Open | text | | Opens the file in a VS Code editor tab. **Ctrl+S** (Cmd+S) saves it straight back to the server, keeping its permissions. Files over 5 MB ask first: **Open Anyway**, **Download** or Cancel |
 | Rename… | ✓ | ✓ | Asks for the new name (the part before the extension is selected), checks it isn't taken, asks once more, then renames over SFTP |
+| New Folder… | | ✓ | Asks for a name, checks it isn't taken, and creates the folder inside the clicked one |
+| Permissions… | ✓ | ✓ | Shows the current mode, e.g. `644`, and sets the one you type (3 or 4 octal digits, like `chmod`) |
+| Copy Path | ✓ | ✓ | Copies the full remote path to the clipboard |
 | Delete… | ✓ | ✓ | Asks first. For a folder the question counts its files, e.g. `Delete folder "logs" and its 128 files?` (`5000+ files` for very big ones). A folder is deleted with everything in it |
 
-**Open** is offered for text files only, so the menu for an archive, image or program is Download, Rename, Delete:
+**Open** is offered for text files only, so the menu for an archive, image or program has no Open:
 
 ![The action menu for the archive access-2026-09-29.log.gz: Download, Rename, Delete, without Open](media/readme/19-binary-file-action-menu.png)
 
@@ -210,9 +232,10 @@ Easy SSH sends a keepalive every 15 seconds. If the server stops answering, or t
 | Action | Result |
 | --- | --- |
 | Type, arrows, Tab, Ctrl+R, Ctrl+L | The remote shell handles the keys. Tab finishes a path such as `cd /tm` |
-| Ctrl+click a file name (Cmd+click on macOS) | Action menu: Download, Open (text files), Rename, Delete |
+| Ctrl+click a file name (Cmd+click on macOS) | Action menu: Download, Open (text files), Rename, Permissions, Copy Path, Delete |
 | Ctrl+S (Cmd+S) in an opened file | Save it back to the server |
-| Ctrl+click a folder name (Cmd+click on macOS) | Action menu: Download (with everything in it), Upload, Rename, Delete |
+| Ctrl+click a folder name (Cmd+click on macOS) | Action menu: Download (with everything in it), Upload, Rename, New Folder, Permissions, Copy Path, Delete |
+| `/run`, `/save`, `/forward` at the prompt | Saved commands and port forwarding, see [Commands at the shell prompt](#commands-at-the-shell-prompt) |
 | Enter in the action menu | Download |
 | Drag with the mouse | Select text |
 | Drag files or folders onto the terminal | Upload into the current remote folder |
@@ -223,6 +246,21 @@ Easy SSH sends a keepalive every 15 seconds. If the server stops answering, or t
 | `exit` | Disconnect and go back to the connection list |
 
 If `editor.multiCursorModifier` is set to `ctrlCmd`, names open with Alt+click instead, like other VS Code terminal links. With **Easy SSH: Plain Click** (`easySsh.plainClick`) a plain click opens the action menu, and selecting text needs Shift+drag. On macOS, turn on `terminal.integrated.macOptionClickForcesSelection` and use Option+drag.
+
+## Port forwarding
+
+Reach a port on the server, or on a host the server can reach, from your own computer, like `ssh -L`. Each forward listens on `127.0.0.1` of your computer.
+
+| You type | Forwards |
+| --- | --- |
+| `3000` | `localhost:3000` to port 3000 on the server |
+| `8080:3000` | `localhost:8080` to port 3000 on the server |
+| `5432:db.internal:5432` | `localhost:5432` to `db.internal:5432`, as the server sees it |
+
+- **Every time you connect:** `/edit` the connection and set **Forward ports**, comma separated, e.g. `3000, 5432:db.internal:5432`. `/import` takes `LocalForward` lines from `~/.ssh/config`.
+- **For this session:** type `/forward 3000` at the shell prompt. It stays for reconnects to the same connection until you close the terminal or connect elsewhere. `/unforward 3000` stops it.
+
+Forwarded ports are listed when the shell opens and in the status bar (`⇄ 3000`). A port that's already in use on your computer is reported and skipped; the rest still work. Forwards stop when you disconnect and start again on reconnect.
 
 ## Downloads
 
@@ -236,7 +274,7 @@ Use a hostname, an IP address, or one or more jump hosts when the server is only
 
 *A session on `staging-db`, reached through `bastion.example.com`.*
 
-`/import` reads `~/.ssh/config`, including `Include` files under `~/.ssh`. It keeps each host's user, port, identity file and `ProxyJump` chain, and applies `Host *` and wildcard defaults the way `ssh` does: the first value wins. Hosts that need a `ProxyCommand` are listed and skipped. Importing again updates hosts without losing your manual edits or start folder.
+`/import` reads `~/.ssh/config`, including `Include` files under `~/.ssh`. It keeps each host's user, port, identity file, `ProxyJump` chain and `LocalForward` ports, and applies `Host *` and wildcard defaults the way `ssh` does: the first value wins. Hosts that need a `ProxyCommand` are listed and skipped. Hosts from an included file are grouped under the file's name (`config.d/work.conf` becomes **work**). Importing again updates hosts without losing your manual edits, start folder, group or saved commands.
 
 ![Importing hosts from ~/.ssh/config](media/readme/06-import-ssh-config.png)
 
@@ -285,6 +323,7 @@ With SSH agent sign-in, Easy SSH tries the agent first, then `~/.ssh/id_ed25519`
 | Works on old, small or locked-down servers | Yes | Often not | Yes | Yes |
 | Works in Cursor and VSCodium | Yes | Microsoft builds only | Yes | Yes |
 | Saved hosts and jump hosts | Yes | Through `~/.ssh/config` | Yes | Through `~/.ssh/config` |
+| Local port forwarding | Yes | Yes | Not in releases | `-L` |
 | Ctrl+click a name to download, open, rename or delete | Files and folders | No | No | No |
 | Upload by dropping onto the terminal | Yes | Into the explorer | Into the explorer | No |
 | Edit remote files in the editor | One file at a time, from the shell | Yes | Yes | No |
@@ -307,6 +346,10 @@ Use Remote-SSH when you want to develop *on* the server. Use Easy SSH when you w
 **How do I edit a remote file?** Ctrl+click its name and choose **Open**, then save with Ctrl+S (Cmd+S). Open is only offered for text files; for anything else, download it.
 
 **Why is there no Open for this file?** Easy SSH thinks it isn't text: its name says so (an archive, image, program…), or its first 8 KB contain NUL bytes or invalid UTF-8. Download it instead.
+
+**How do I forward a port?** Type `/forward 3000` at the shell prompt for this session, or `/edit` the connection and set **Forward ports** to forward it at every connect. See [Port forwarding](#port-forwarding).
+
+**How do I change a file's permissions?** Ctrl+click its name and choose **Permissions…**, then type the mode, e.g. `644`.
 
 **How do I change directory?** Type `cd`, as in any shell. Tab completes remote paths.
 

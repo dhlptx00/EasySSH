@@ -6,6 +6,7 @@ import type {
   ConnectionRecord,
   DownloadResult,
   FolderDownloadResult,
+  ForwardSpec,
   SecretUpdate,
   TransferOptions,
   UploadOptions,
@@ -49,6 +50,12 @@ export interface FileSession {
   writeWhole?(remotePath: string, data: Uint8Array, options: { create: boolean; overwrite: boolean }): Promise<RemoteStat>;
   /** Create one folder. */
   makeDir?(remotePath: string): Promise<void>;
+  /** Set permission bits, e.g. 0o755. */
+  chmod?(remotePath: string, mode: number): Promise<void>;
+  /** Carry 127.0.0.1:localPort through the server. Rejects when the port is taken. */
+  forward?(spec: ForwardSpec, log: (line: string) => void): Promise<void>;
+  /** Stop a forward. False when that port was not forwarded. */
+  unforward?(localPort: number): boolean;
   openShell(columns: number, rows: number, onData: (chunk: string) => void, onClose: () => void): Promise<void>;
   writeShell(data: string): void;
   resizeShell(columns: number, rows: number): void;
@@ -58,6 +65,8 @@ export interface FileSession {
 
 export interface RemoteStat {
   kind: 'dir' | 'file' | 'other';
+  /** Permission and type bits, when the server sent them. */
+  mode?: number;
   size: number;
   /** Milliseconds since the epoch. Zero when unknown. */
   mtime: number;
@@ -79,6 +88,16 @@ export interface RenameRequest {
   selection: [number, number];
   /** An error to show for the typed name, or undefined when it can be used. */
   validate(value: string): Promise<string | undefined>;
+}
+
+/** A one-line input box. */
+export interface TextRequest {
+  title: string;
+  prompt: string;
+  value?: string;
+  placeholder?: string;
+  /** An error to show for the typed text, or undefined when it can be used. */
+  validate?(value: string): string | undefined | Promise<string | undefined>;
 }
 
 export interface ConnectResult {
@@ -173,6 +192,12 @@ export interface AppHost {
   pickUploadFiles?(remoteDir: string): Promise<string[] | undefined>;
   /** Ask for a new name. Undefined when cancelled. */
   askRename?(request: RenameRequest): Promise<string | undefined>;
+  /** Ask for one line of text. Undefined when cancelled. */
+  askText?(request: TextRequest): Promise<string | undefined>;
+  /** A quick pick of rows. The chosen index, or undefined when cancelled. */
+  pickItem?(title: string, placeholder: string, items: { label: string; description?: string }[]): Promise<number | undefined>;
+  /** Put text on the clipboard. */
+  copyText?(text: string): Promise<void>;
   /** A modal question with one action button (and Cancel). True when the button was chosen. */
   confirm?(message: string, detail: string, action: string): Promise<boolean>;
   /** Open a remote file of this terminal's connection in an editor tab. */

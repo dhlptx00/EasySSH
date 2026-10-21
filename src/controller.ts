@@ -737,6 +737,18 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
       pickDownloadParent: (folder, name) => this.pickDownloadParent(folder, name),
       pickUploadFiles: (remoteDir) => this.pickUploadFiles(remoteDir),
       askRename: (request) => this.askRename(request),
+      askText: (request) => Promise.resolve(vscode.window.showInputBox({
+        title: request.title,
+        prompt: request.prompt,
+        value: request.value,
+        placeHolder: request.placeholder,
+        validateInput: request.validate,
+      })),
+      pickItem: async (title, placeholder, items) => {
+        const picked = await vscode.window.showQuickPick(items.map((item, index) => ({ ...item, index })), { title, placeHolder: placeholder });
+        return picked?.index;
+      },
+      copyText: (text) => Promise.resolve(vscode.env.clipboard.writeText(text)),
       confirm: (message, detail, action) => this.confirm(message, detail, action),
       openRemoteFile: (remotePath) => this.openRemoteFile(liveOf(), remotePath),
       choose: (message, detail, answers) => this.choose(message, detail, answers),
@@ -863,6 +875,8 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
           privateKeyPath: imported.privateKeyPath,
           jumps: imported.jumps,
         };
+        if (imported.forwards.length) record.forwards = imported.forwards;
+        if (imported.group) record.group = imported.group;
         await this.store.save(record, { action: 'clear' });
         existing.push(record);
         added += 1;
