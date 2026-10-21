@@ -14,7 +14,7 @@ Easy SSH talks SSH directly from your editor. **Nothing is installed on the serv
 
 *Real recording: connect from the home screen, Ctrl+click a file, Download, and follow the progress ([mp4](media/readme/demo.mp4)).*
 
-![Easy SSH overview: a home screen with your recent connection, a guided /new setup with Test connection, colors that follow your VS Code theme, sign-in options, jump hosts, a real login shell, a Ctrl+click or Cmd+click menu to download, open, rename or delete a file or folder, editing a remote file in a VS Code tab, and drop to upload](media/readme/infographic-0.4.0.png)
+![Easy SSH overview: a home screen with your recent connection, a guided /new setup with Test connection, colors that follow your VS Code theme, sign-in options, jump hosts, a real login shell, a Ctrl+click or Cmd+click menu to download, open, rename, chmod or delete a file or folder, editing a remote file in a VS Code tab, and drop to upload](media/readme/infographic-0.4.0.png)
 
 ## Install
 
@@ -142,7 +142,7 @@ Ctrl+click a file or folder name in the remote shell (Cmd+click on macOS) to ope
 
 | A folder | A text file |
 | --- | --- |
-| ![The action menu for the folder logs: Download, Upload, Rename, Delete](media/readme/08-folder-action-menu.png) | ![The action menu for the text file access.log: Download, Open, Rename, Delete](media/readme/09-file-action-menu.png) |
+| ![The action menu for the folder logs: Download, Upload, Rename, New Folder, Permissions, Copy Path, Delete](media/readme/08-folder-action-menu.png) | ![The action menu for the text file access.log: Download, Open, Rename, Permissions, Copy Path, Delete](media/readme/09-file-action-menu.png) |
 | Download, Upload, Rename, New Folder, Permissions, Copy Path, Delete | Download, Open, Rename, Permissions, Copy Path, Delete |
 
 | Action | Files | Folders | What it does |
@@ -158,7 +158,7 @@ Ctrl+click a file or folder name in the remote shell (Cmd+click on macOS) to ope
 
 **Open** is offered for text files only, so the menu for an archive, image or program has no Open:
 
-![The action menu for the archive access-2026-09-29.log.gz: Download, Rename, Delete, without Open](media/readme/19-binary-file-action-menu.png)
+![The action menu for the archive access-2026-09-29.log.gz: Download, Rename, Permissions, Copy Path, Delete, without Open](media/readme/19-binary-file-action-menu.png)
 
 Easy SSH decides by the name first (`.txt`, `.json`, `.yaml`, `.log`, `.conf`, `.sh`, `.py`, `Dockerfile`, `.bashrc`, `authorized_keys` and many more are text; `.zip`, `.tar.gz`, `.png`, `.pdf`, `.so`, `.exe` and the like are not). For any other name it reads the first 8 KB over SFTP: no NUL bytes and valid UTF-8 means text. If that read fails or takes too long, Open is offered.
 
