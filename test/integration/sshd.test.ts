@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'crypto';
 import fs from 'fs';
+import net from 'net';
 import os from 'os';
 import path from 'path';
 import { describe, it } from 'node:test';
@@ -312,6 +313,49 @@ describe('real sshd', { skip }, () => {
     }
   });
 
+  it('creates a folder, changes modes, and forwards a local port through the server', async () => {
+    const opened = await connect('esit_bash');
+    const echo = net.createServer((socket) => socket.pipe(socket));
+    await new Promise<void>((resolve) => echo.listen(0, '127.0.0.1', resolve));
+    const echoPort = (echo.address() as net.AddressInfo).port;
+    try {
+      const base = `${opened.cwd}/modes-${randomBytes(4).toString('hex')}`;
+      await opened.session.makeDir(base);
+      assert.equal((await opened.session.stat(base)).kind, 'dir');
+      await opened.session.chmod(base, 0o700);
+      assert.equal(((await opened.session.stat(base)).mode ?? 0) & 0o7777, 0o700);
+      await assert.rejects(opened.session.makeDir(base));
+
+      const local = await new Promise<number>((resolve) => {
+        const probe = net.createServer().listen(0, '127.0.0.1', () => {
+          const { port } = probe.address() as net.AddressInfo;
+          probe.close(() => resolve(port));
+        });
+      });
+      // The test sshd runs on this machine, so the server's localhost is ours.
+      await opened.session.forward({ localPort: local, remoteHost: '127.0.0.1', remotePort: echoPort }, () => {});
+      await assert.rejects(opened.session.forward({ localPort: local, remoteHost: '127.0.0.1', remotePort: echoPort }, () => {}), /already forwarded/);
+      const reply = await new Promise<string>((resolve, reject) => {
+        const client = net.connect(local, '127.0.0.1', () => client.write('through-ssh'));
+        client.on('data', (data) => {
+          resolve(data.toString());
+          client.end();
+        });
+        client.on('error', reject);
+      });
+      assert.equal(reply, 'through-ssh');
+      assert.equal(opened.session.unforward(local), true);
+      await assert.rejects(new Promise((resolve, reject) => {
+        const again = net.connect(local, '127.0.0.1', () => resolve(again.end()));
+        again.on('error', reject);
+      }));
+      await opened.session.remove(base, { signal: new AbortController().signal });
+    } finally {
+      opened.session.close();
+      echo.close();
+    }
+  });
+
   it('opens, saves and protects a remote file for an editor tab (Open)', async () => {
     const opened = await connect('esit_bash');
     const other = await connect('esit_bash');
@@ -533,10 +577,14 @@ describe('real sshd', { skip }, () => {
     it(`runs a whole Easy SSH terminal session against ${user}: login output, hidden hook, folder tracking`, async () => {
       const status: string[] = [];
       const shown: string[] = [];
+      const saved: ConnectionRecord[] = [];
       const record: ConnectionRecord = { id: user, name: user, host: HOST, port: PORT, username: user, auth: 'privateKey', privateKeyPath: KEY, jumps: [] };
       const host: AppHost = {
         listConnections: async () => [record],
-        saveConnection: async () => {},
+        saveConnection: async (next) => {
+          saved.push(next);
+        },
+        pickItem: async () => 0,
         deleteConnection: async () => {},
         secretFlags: async () => ({ password: false, passphrase: false }),
         importConfig: async () => ({ ok: true, message: '' }),
@@ -573,6 +621,12 @@ describe('real sshd', { skip }, () => {
         // Typed right away: held until the hook is in, then sent.
         for (const ch of 'cd /tmp\r') app.onRawInput(ch);
         await until(() => status.at(-1) === `${user}:/tmp`, 'cd /tmp tracked');
+        // /save and /run: the typed line is cleared, never run, and the snippet runs.
+        for (const ch of '/save echo SNIP-4\'\'2\r') app.onRawInput(ch);
+        await until(() => saved.at(-1)?.snippets?.[0] === 'echo SNIP-4\'\'2', '/save stored the command');
+        for (const ch of '/run\r') app.onRawInput(ch);
+        await until(() => shown.join('').includes('SNIP-42'), '/run ran the snippet');
+        assert.doesNotMatch(shown.join(''), /command not found|Unknown command|No such file/);
         const screen = shown.join('');
         if (user === 'esit_bash') assert.match(screen, /EASY-SSH-IT-LOGIN-BANNER/);
         assert.doesNotMatch(screen, /PROMPT_COMMAND|precmd_functions|fish_prompt|syntax error|command not found/);

@@ -4,6 +4,16 @@ All notable changes to Easy SSH. Dates are in UTC+8.
 
 If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh&ssr=false#review-details) or [Open VSX](https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews) helps others find it.
 
+## [0.5.0] - 2026-10-21
+
+### Added
+
+- Port forwarding (`ssh -L`): set **Forward ports** on a connection (`/edit`), or type `/forward 3000`, `/forward 8080:3000` or `/forward 5432:db.internal:5432` at the shell prompt. `/forward` lists them, `/unforward 3000` stops one. Ports listen on 127.0.0.1, show in the status bar, stop on disconnect and come back on reconnect. `/import` reads `LocalForward`.
+- Saved commands: `/save` at the shell prompt keeps a command for the connection (it offers the last line you typed to check first), `/run` picks one and runs it.
+- Action menu: **New Folder…** for folders, **Permissions…** (chmod, shows the current mode) and **Copy Path** for files and folders.
+- Groups: an optional **Group** on each connection lists it under a heading on the home screen. `/import` groups hosts from included files by the file's name.
+- Search: typing after `/` on the home screen also finds connections by host, user or group.
+
 ## [0.4.5] - 2026-10-21
 
 ### Changed
@@ -197,6 +207,7 @@ If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace
 - Open a remote directory, click a file to download it, and drop local files to upload them.
 - Connect with a password, a private key, or an SSH agent, including one or more jump hosts.
 
+[0.5.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.5.0
 [0.4.5]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.5
 [0.4.4]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.4
 [0.4.3]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.3

@@ -918,6 +918,10 @@ function connectionTable(
   const offset = Math.max(0, items.indexOf(visible[0] ?? items[0]));
   visible.forEach((item, index) => {
     const isSelected = offset + index === selected;
+    if (item.group && (index === 0 || visible[index - 1].group !== item.group)) {
+      const count = items.filter((other) => other.group === item.group).length;
+      rows.push({ pieces: [{ text: ' '.repeat(lead) }, { text: truncate(`${item.group} (${count})`, Math.max(1, width - lead)), tone: 'accent', bold: true }], optional: true });
+    }
     const pieces: Piece[] = [{ text: isSelected ? '› ' : '  ', tone: 'accent', bold: true }];
     columns.forEach((column, columnIndex) => {
       if (columnIndex > 0) pieces.push({ text: ' '.repeat(gap + (column.key === 'token' ? spare : 0)) });
@@ -1223,6 +1227,7 @@ function slashTargetsFrom(items: ConnectionItem[]): SlashTarget[] {
     id: item.id,
     name: item.name,
     description: `${item.userHost} · ${item.detail}`,
+    search: `${item.userHost} ${item.group ?? ''}`,
   }));
 }
 

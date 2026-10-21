@@ -15,6 +15,7 @@ describe('loadSshConfig', () => {
     try {
       const hosts = loadSshConfig(path.join(ssh, 'config'), ssh);
       assert.deepEqual(hosts.map((host) => host.patterns[0]), ['web', 'extra']);
+      assert.deepEqual(hosts.map((host) => host.file), [undefined, 'extra'], 'included hosts carry their file name for the group');
       assert.throws(() => loadSshConfig(path.join(dir, 'missing'), ssh), MissingSshConfig);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

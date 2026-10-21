@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { defaultSlashPick, isReservedCommand, matchSlashCommands, parseConnectionCommand, rawConnectionToken } from './commands';
+import { defaultSlashPick, isReservedCommand, matchSlashCommands, parseConnectionCommand, parseSessionCommand, rawConnectionToken } from './commands';
 
 describe('connection commands', () => {
   it('connects when the line is empty', () => {
@@ -48,5 +48,29 @@ describe('connection commands', () => {
     const mixed = matchSlashCommands('/edit', [{ id: '2', name: 'editor', description: 'lab' }]);
     assert.deepEqual(mixed.map((command) => command.name), ['editor', 'edit']);
     assert.equal(defaultSlashPick(mixed, '/edit'), 1);
+  });
+
+  it('finds connections by host, user or group as well as by name', () => {
+    const targets = [
+      { id: 'a', name: 'api', description: '', search: 'deploy@10.0.0.5:22 work' },
+      { id: 'b', name: 'db', description: '', search: 'pg@db.internal:22 ' },
+    ];
+    assert.deepEqual(matchSlashCommands('/10.0.0', targets).map((item) => item.connectionId), ['a']);
+    assert.deepEqual(matchSlashCommands('/pg@', targets).map((item) => item.connectionId), ['b']);
+    assert.deepEqual(matchSlashCommands('/WORK', targets).map((item) => item.connectionId), ['a']);
+    assert.equal(matchSlashCommands('/zzz', targets).length, 0);
+    // A query that can still become a command does not search hosts.
+    const editing = matchSlashCommands('/ed', [{ id: 'c', name: 'web', description: '', search: 'ed@web:22 ' }]);
+    assert.deepEqual(editing.map((item) => item.name), ['edit']);
+  });
+
+  it('reads /run, /save, /forward and /unforward at the shell prompt, and nothing else', () => {
+    assert.deepEqual(parseSessionCommand('/run'), { type: 'run' });
+    assert.deepEqual(parseSessionCommand('  /save   tail -f log '), { type: 'save', command: 'tail -f log' });
+    assert.deepEqual(parseSessionCommand('/save'), { type: 'save', command: '' });
+    assert.deepEqual(parseSessionCommand('/forward 8080:3000'), { type: 'forward', spec: '8080:3000' });
+    assert.deepEqual(parseSessionCommand('/forward'), { type: 'forward', spec: '' });
+    assert.deepEqual(parseSessionCommand('/unforward 8080'), { type: 'unforward', port: '8080' });
+    for (const line of ['/run x', '/runner', '/usr/bin/run', 'run', 'echo /save', '/Save x']) assert.equal(parseSessionCommand(line), undefined, line);
   });
 });

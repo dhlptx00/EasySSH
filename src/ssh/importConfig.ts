@@ -1,5 +1,6 @@
-import type { AuthMethod, ConnectionRecord, JumpSpec } from '../types';
+import type { AuthMethod, ConnectionRecord, ForwardSpec, JumpSpec } from '../types';
 import { expandHome, globMatch } from '../text';
+import { parseLocalForward } from './forward';
 import { parseJumpToken } from './jump';
 import type { ParsedHost } from './parseConfig';
 
@@ -10,6 +11,7 @@ export interface DefinedFields {
   user: boolean;
   identity: boolean;
   jumps: boolean;
+  forwards: boolean;
 }
 
 export interface ImportedConnection {
@@ -20,6 +22,10 @@ export interface ImportedConnection {
   auth: Extract<AuthMethod, 'privateKey' | 'agent'>;
   privateKeyPath?: string;
   jumps: JumpSpec[];
+  /** LocalForward lines. */
+  forwards: ForwardSpec[];
+  /** The included file the Host line is in, e.g. "work" for ~/.ssh/config.d/work. */
+  group?: string;
   defined: DefinedFields;
 }
 
@@ -96,6 +102,7 @@ interface Resolved {
   keyPath?: string;
   proxyJump?: string;
   proxyCommand?: string;
+  forwards: ForwardSpec[];
   defined: DefinedFields;
 }
 
@@ -107,7 +114,17 @@ function resolveHost(hosts: ParsedHost[], name: string, envUser: string, home: s
   const keyPath = identity ? expandHome(expandTokens(identity, { home, localUser: envUser, host, user: username }), home) : undefined;
   const proxyJump = config.proxyjump && config.proxyjump.toLowerCase() !== 'none' ? config.proxyjump : undefined;
   const proxyCommand = config.proxycommand && config.proxycommand.toLowerCase() !== 'none' ? config.proxycommand : undefined;
+  // LocalForward may repeat, and every matching block adds to the list (unlike other keywords).
+  const forwards: ForwardSpec[] = [];
+  for (const block of hosts) {
+    if (!hostBlockMatches(block.patterns, name)) continue;
+    for (const value of block.values.localforward ?? []) {
+      const spec = parseLocalForward(value);
+      if (spec && !forwards.some((item) => item.localPort === spec.localPort)) forwards.push(spec);
+    }
+  }
   return {
+    forwards,
     host,
     port: portOr(config.port, 22),
     username,
@@ -120,6 +137,7 @@ function resolveHost(hosts: ParsedHost[], name: string, envUser: string, home: s
       user: config.user !== undefined,
       identity: keyPath !== undefined,
       jumps: proxyJump !== undefined,
+      forwards: forwards.length > 0,
     },
   };
 }
@@ -198,6 +216,8 @@ export function connectionsFromHosts(hosts: ParsedHost[], envUser: string, home:
       auth: resolved.keyPath ? 'privateKey' : 'agent',
       privateKeyPath: resolved.keyPath,
       jumps: expandProxy(resolved.proxyJump, hosts, aliases, envUser, home, new Set([name])),
+      forwards: resolved.forwards,
+      group: hosts.find((block) => block.patterns.includes(name))?.file,
       defined: resolved.defined,
     });
   }
@@ -226,5 +246,8 @@ export function mergeImported(existing: ConnectionRecord, imported: ImportedConn
     take('privateKeyPath', imported.privateKeyPath, 'key');
   }
   if (imported.defined.jumps) take('jumps', imported.jumps, 'jump hosts');
+  if (imported.defined.forwards) take('forwards', imported.forwards, 'forwards');
+  // A group set by hand stays.
+  if (imported.group && !existing.group) take('group', imported.group, 'group');
   return { record, changed };
 }

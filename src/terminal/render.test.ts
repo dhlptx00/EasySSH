@@ -4,6 +4,7 @@ import type { BrowseEntry } from '../types';
 import { homeTips, nameSpans, render, type Frame } from './render';
 import type { ConnectionItem, Screen } from './screen';
 import { DARK, LIGHT, mix, type PaintTheme } from './theme';
+import { byGroup } from './app';
 import { emptyDraft } from './wizard';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -240,6 +241,17 @@ describe('terminal screen', () => {
     assert.equal(choice.cursor, undefined);
   });
 
+  it('puts grouped connections under a heading with their count, after the ungrouped ones', () => {
+    const grouped = byGroup([{ ...items[0], group: 'work' }, items[1], { ...items[2], group: 'work' }, { ...items[3], group: 'lab' }]);
+    assert.deepEqual(grouped.map((item) => item.id), ['d', 's', 'b', 'p']);
+    const lines = text(render({ kind: 'connections', items: grouped, selected: 0, command: '', pick: 0 }, view)).split('\n');
+    const at = (pattern: RegExp) => lines.findIndex((line) => pattern.test(line));
+    assert.ok(at(/│\s+lab \(1\)/) > at(/dev-box/));
+    assert.ok(at(/staging-db/) > at(/│\s+lab \(1\)/));
+    assert.ok(at(/│\s+work \(2\)/) > at(/staging-db/));
+    assert.ok(at(/bastion\s+dev@bastion/) > at(/│\s+work \(2\)/));
+  });
+
   it('summarises a draft with the ssh command, Test connection, Save and Back', () => {
     const draft = {
       ...emptyDraft(),
@@ -252,13 +264,17 @@ describe('terminal screen', () => {
       passphrase: 'very secret',
       jumpMode: 'custom' as const,
       jump: 'dev@bastion.example.com',
+      forwards: '5432:db.internal:5432',
+      group: 'work',
     };
-    const frame = render({ kind: 'summary', mode: 'new', title: 'new connection', draft, choice: 7, test: { ok: false, text: 'Test failed: Authentication failed' } }, { ...view, cols: 120 });
+    const frame = render({ kind: 'summary', mode: 'new', title: 'new connection', draft, choice: 9, test: { ok: false, text: 'Test failed: Authentication failed' } }, { ...view, cols: 120 });
     const shown = text(frame);
     assert.match(shown, /Name\s+prod-api/);
     assert.match(shown, /Sign-in\s+Key ~\/\.ssh\/id_ed25519 · new passphrase/);
     assert.doesNotMatch(shown, /very secret/);
-    assert.match(shown, /\$ ssh -p 2222 -i ~\/\.ssh\/id_ed25519 -J dev@bastion\.example\.com deploy@prod-api\.example\.com/);
+    assert.match(shown, /\$ ssh -p 2222 -i ~\/\.ssh\/id_ed25519 -J dev@bastion\.example\.com -L 5432:db\.internal:5432[\s│]+deploy@prod-api\.example\.com/);
+    assert.match(shown, /Forward ports\s+5432:db\.internal:5432/);
+    assert.match(shown, /Group\s+work/);
     assert.match(shown, /✗ Test failed: Authentication failed/);
     assert.match(shown, /› Save/);
     assert.match(shown, /Test connection/);

@@ -2,7 +2,7 @@ import { remoteBasename, remoteDirname } from '../remotePath';
 import { formatSize, formatTime } from '../text';
 
 /** What Ctrl/Cmd+click on a name in the remote shell can do. */
-export type FileAction = 'download' | 'upload' | 'open' | 'rename' | 'delete';
+export type FileAction = 'download' | 'upload' | 'open' | 'rename' | 'newFolder' | 'chmod' | 'copyPath' | 'delete';
 
 /** The file or folder a click landed on. Symlinks are already resolved to what they point at. */
 export interface ActionTarget {
@@ -97,6 +97,11 @@ export function actionMenu(target: ActionTarget, options: { downloadLabel: strin
   items.push(
     { separator: true, label: '' },
     { action: 'rename', icon: 'pencil', label: 'Rename…', description: `Give the ${file ? 'file' : 'folder'} a new name on the server` },
+  );
+  if (!file) items.push({ action: 'newFolder', icon: 'new-folder', label: 'New Folder…', description: `Create a folder in ${target.path}` });
+  items.push(
+    { action: 'chmod', icon: 'lock', label: 'Permissions…', description: 'Change the mode, e.g. 644 or 755 (chmod)' },
+    { action: 'copyPath', icon: 'copy', label: 'Copy Path', description: target.path },
     { separator: true, label: '' },
     {
       action: 'delete',
@@ -123,6 +128,18 @@ export function renameProblem(value: string, old: string): string | undefined {
   if (value === '.' || value === '..') return `"${value}" is not a valid name`;
   if (value === old) return 'Enter a different name';
   return undefined;
+}
+
+/** A mode typed for chmod: three or four octal digits, e.g. 755 or 0644. */
+export function parseMode(value: string): number | undefined {
+  const text = value.trim();
+  return /^[0-7]{3,4}$/.test(text) ? parseInt(text, 8) : undefined;
+}
+
+/** Permission bits as chmod takes them, e.g. "755". */
+export function formatMode(mode: number): string {
+  const bits = mode & 0o7777;
+  return bits.toString(8).padStart(3, '0');
 }
 
 export interface TreeCount {

@@ -3,6 +3,7 @@ import { withParent } from '../entries';
 import type { AskAnswer, AskRequest } from '../ssh/auth';
 import { HostKeyDeclined, TransferCancelled, TransferError, humanizeSshError } from '../ssh/errors';
 import { remoteBasename, remoteDirname, remoteJoin } from '../remotePath';
+import { parseForward } from '../ssh/forward';
 import { RawShellTap, type RawShellUpdate } from '../ssh/rawShell';
 import type { ConnectUi, HostKeyQuestion } from '../ssh/session';
 import { setupLine, shellQuote, type ShellKind } from '../ssh/shellFeed';
@@ -11,7 +12,9 @@ import {
   DELETE_COUNT_CAP,
   DELETE_COUNT_MS,
   deleteQuestion,
+  formatMode,
   onlyActions,
+  parseMode,
   renameProblem,
   renameQuestion,
   renameSelection,
@@ -26,13 +29,13 @@ import {
 } from './actions';
 import { safeFileName, shortenPath } from '../text';
 import { classifyName, looksLikeText, SNIFF_BYTES } from '../fileTypes';
-import type { BrowseEntry, ConflictChoice, ConnectionRecord, Notice, TransferProgress } from '../types';
+import type { BrowseEntry, ConflictChoice, ConnectionRecord, ForwardSpec, Notice, TransferProgress } from '../types';
 import type { AppHost, FileSession, ProgressHandle } from './host';
 import { formatProgress, progressFraction, wantsNotification } from './progress';
 import type { InputEvent } from './input';
 import { completionQuery, completionSuffix, InputLine } from './complete';
 import { encodePaste, pullRawInput, type RawInputPiece } from './rawInput';
-import { defaultSlashPick, matchSlashCommands, parseConnectionCommand, type SlashTarget } from './commands';
+import { defaultSlashPick, matchSlashCommands, parseConnectionCommand, parseSessionCommand, type SessionCommand, type SlashTarget } from './commands';
 import { peelPointer, type PointerEvent } from './pointer';
 import { linkAt, nameSpans, paint, render, sessionHint, type LineLink } from './render';
 import { Viewport } from './viewport';
@@ -144,6 +147,7 @@ function describe(record: ConnectionRecord, all: ConnectionRecord[] = [], lastUs
     jumpHosts: record.jumps.length ? record.jumps.map((jump) => `${jump.username ? `${jump.username}@` : ''}${jump.host}:${jump.port}`).join(', ') : undefined,
     askPassword: record.askPassword,
     startPath: record.startPath,
+    group: record.group,
   };
 }
 
@@ -234,6 +238,12 @@ export class EasySshApp {
   private dropReason: string | undefined;
   private reconnectTimer: ReturnType<typeof setInterval> | undefined;
   private reconnectTries = 0;
+  /** Local ports forwarded through the open session. */
+  private forwards: ForwardSpec[] = [];
+  /** Forwards added with /forward, set up again on a reconnect to the same connection. */
+  private extraForwards: { id: string; specs: ForwardSpec[] } = { id: '', specs: [] };
+  /** The last line typed at the shell prompt, for /save. */
+  private lastCommand: string | undefined;
 
   constructor(
     private readonly host: AppHost,
@@ -694,7 +704,7 @@ export class EasySshApp {
         this.host.quit();
         return;
       case 'help':
-        this.showNotice('info', 'Commands: /new, /edit, /delete, /import, /folder, /quit. A connection name connects directly.');
+        this.showNotice('info', 'Commands: /new, /edit, /delete, /import, /folder, /quit. A connection name connects directly. At the shell prompt: /run, /save, /forward');
         return;
       default: {
         const unreachable: never = action;
@@ -1098,7 +1108,7 @@ export class EasySshApp {
     if (!update.cwd || !this.remote) return;
     this.remote = { ...this.remote, cwd: update.cwd };
     if (!this.remote.files) return;
-    if (!this.transferAbort) this.host.setStatus(`${this.remote.title}:${update.cwd}`);
+    if (!this.transferAbort) this.folderStatus(`${this.remote.title}:${update.cwd}`);
     const cwd = update.cwd;
     void this.enqueue(() => this.refreshListing(cwd));
   }
@@ -1136,6 +1146,7 @@ export class EasySshApp {
     for (const line of done) {
       const entry = line === '\u0000' ? null : line.trim();
       if (entry === '') continue;
+      if (entry) this.lastCommand = entry;
       this.pendingCommands.push(entry);
       this.followLines.push(entry);
     }
@@ -1143,6 +1154,156 @@ export class EasySshApp {
     // Too many lines to replay safely: forget the folder rather than guess.
     if (this.followLines.length > 200) this.followLines.splice(0, this.followLines.length, null);
     this.scheduleFollow();
+  }
+
+  /**
+   * Enter ending a typed `/run`, `/save`, `/forward` or `/unforward` line: clear the
+   * line in the shell (Ctrl+U) instead of running it, and handle it here.
+   */
+  private takeSessionCommand(tracked: string, wire: string): boolean {
+    const enter = tracked.search(/[\r\n]/);
+    if (enter < 0 || enter !== tracked.length - 1 || wire !== tracked) return false;
+    const before = this.inputLine.text();
+    if (before === null) return false;
+    const command = parseSessionCommand(before + tracked.slice(0, enter));
+    if (!command) return false;
+    this.writeShell(`${wire.slice(0, enter)}\x15`);
+    this.inputLine.reset();
+    void this.enqueue(() => this.runSessionCommand(command));
+    return true;
+  }
+
+  private async runSessionCommand(command: SessionCommand): Promise<void> {
+    const session = this.session;
+    const record = this.connectedRecord;
+    if (!session || !record || !this.remote) return;
+    switch (command.type) {
+      case 'run':
+        await this.runSnippet(record);
+        return;
+      case 'save':
+        await this.saveSnippet(record, command.command);
+        return;
+      case 'forward':
+        await this.addForward(session, record, command.spec);
+        return;
+      case 'unforward':
+        this.removeForward(session, command.port);
+        return;
+      default: {
+        const unreachable: never = command;
+        return unreachable;
+      }
+    }
+  }
+
+  /** /run: pick a saved command and type it at the prompt with Enter. */
+  private async runSnippet(record: ConnectionRecord): Promise<void> {
+    const snippets = record.snippets ?? [];
+    if (snippets.length === 0 || !this.host.pickItem) {
+      this.flashStatus('No saved commands yet. Type /save after a command to keep it');
+      return;
+    }
+    const items = [...snippets.map((label) => ({ label })), { label: '$(trash) Remove a saved command…' }];
+    const epoch = this.browseEpoch;
+    const index = await this.host.pickItem(`Run on ${record.name}`, 'Enter types the command at the prompt and runs it', items);
+    if (index === undefined || epoch !== this.browseEpoch || !this.remote) return;
+    if (index < snippets.length) {
+      this.typeText(`${snippets[index]}\r`, `${snippets[index]}\r`, false);
+      return;
+    }
+    const remove = await this.host.pickItem(`Remove a saved command of ${record.name}`, 'Enter removes it', snippets.map((label) => ({ label })));
+    if (remove === undefined) return;
+    await this.updateRecord(record, { snippets: snippets.filter((_item, at) => at !== remove) });
+    this.flashStatus(`Removed "${snippets[remove]}"`);
+  }
+
+  /**
+   * /save [command]: keep a command for /run. Without one, ask, starting from the
+   * last line typed (it could have been a password typed at a prompt, so never save it unseen).
+   */
+  private async saveSnippet(record: ConnectionRecord, typed: string): Promise<void> {
+    let command: string | undefined = typed;
+    if (!command && this.host.askText) {
+      command = await this.host.askText({
+        title: `Save a command for ${record.name}`,
+        prompt: '/run types it at the prompt',
+        value: this.lastCommand,
+        validate: (value) => (value.trim() ? undefined : 'Type a command'),
+      });
+    }
+    command = command?.trim();
+    if (!command) return;
+    const snippets = record.snippets ?? [];
+    if (snippets.includes(command)) {
+      this.flashStatus(`Already saved: ${command}`);
+      return;
+    }
+    await this.updateRecord(record, { snippets: [...snippets, command] });
+    this.flashStatus(`Saved for /run: ${command}`);
+  }
+
+  /** Save changed fields of the connected record, keeping its secret. */
+  private async updateRecord(record: ConnectionRecord, change: Partial<ConnectionRecord>): Promise<void> {
+    const next: ConnectionRecord = { ...record, ...change };
+    await this.host.saveConnection(next, { action: 'keep' });
+    this.records.set(next.id, next);
+    if (this.connectedRecord?.id === next.id) this.connectedRecord = next;
+  }
+
+  /** Start forwards; a port that fails is reported and skipped. Returns the lines to show. */
+  private async startForwards(session: FileSession, specs: ForwardSpec[]): Promise<string[]> {
+    const lines: string[] = [];
+    for (const spec of specs) {
+      if (!session.forward || this.forwards.some((item) => item.localPort === spec.localPort)) continue;
+      try {
+        await session.forward(spec, (line) => this.host.log(line));
+        this.forwards.push(spec);
+        lines.push(`Forwarding localhost:${spec.localPort} → ${spec.remoteHost}:${spec.remotePort}`);
+      } catch (err) {
+        lines.push(`Port ${spec.localPort} not forwarded: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return lines;
+  }
+
+  /** /forward lists the forwards; /forward spec adds one for this session and its reconnects. */
+  private async addForward(session: FileSession, record: ConnectionRecord, text: string): Promise<void> {
+    if (!text) {
+      this.flashStatus(this.forwards.length
+        ? `Forwarding ${this.forwards.map((spec) => `${spec.localPort} → ${spec.remoteHost}:${spec.remotePort}`).join(', ')}`
+        : 'No ports forwarded. /forward 3000 forwards localhost:3000 to port 3000 on the server');
+      return;
+    }
+    let spec: ForwardSpec;
+    try {
+      spec = parseForward(text);
+    } catch (err) {
+      this.flashStatus(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (!session.forward) return;
+    const [line] = await this.startForwards(session, [spec]);
+    if (!line) {
+      this.flashStatus(`Port ${spec.localPort} is already forwarded`);
+      return;
+    }
+    if (this.forwards.includes(spec)) {
+      this.extraForwards = { id: record.id, specs: [...(this.extraForwards.id === record.id ? this.extraForwards.specs : []), spec] };
+      this.host.log(line);
+    }
+    this.flashStatus(line);
+  }
+
+  private removeForward(session: FileSession, text: string): void {
+    const port = Number(text);
+    if (!session.unforward?.(port)) {
+      this.flashStatus(`Port ${text || '?'} is not forwarded. /unforward takes a local port, e.g. /unforward 3000`);
+      return;
+    }
+    this.forwards = this.forwards.filter((spec) => spec.localPort !== port);
+    this.extraForwards = { ...this.extraForwards, specs: this.extraForwards.specs.filter((spec) => spec.localPort !== port) };
+    this.flashStatus(`Stopped forwarding localhost:${port}`);
   }
 
   /**
@@ -1187,7 +1348,7 @@ export class EasySshApp {
       if (this.remote.lost) return;
       this.remote = { ...this.remote, entries: [], lost: true };
       this.host.log('The current folder is not known (a line in a shell without the prompt hook could not be followed). Names are not linked until cd /absolute/path.');
-      if (!this.transferAbort) this.host.setStatus(`${this.remote.title}: folder unknown`);
+      if (!this.transferAbort) this.folderStatus(`${this.remote.title}: folder unknown`);
       return;
     }
     if (cwd === this.remote.cwd && !this.remote.lost) return;
@@ -1200,7 +1361,7 @@ export class EasySshApp {
     }
     if (epoch !== this.browseEpoch || this.follower !== follower || !this.remote || follower.cwd !== cwd) return;
     this.remote = { ...this.remote, cwd, entries, lost: false };
-    if (!this.transferAbort) this.host.setStatus(`${this.remote.title}:${cwd}`);
+    if (!this.transferAbort) this.folderStatus(`${this.remote.title}:${cwd}`);
   }
 
   /** Undefined while the tracked folder is current; otherwise why it is not. */
@@ -1430,6 +1591,7 @@ export class EasySshApp {
   }
 
   private typeText(tracked: string, wire: string, remember: boolean): void {
+    if (remember && !this.remoteAlt && this.takeSessionCommand(tracked, wire)) return;
     if (!this.remoteAlt) this.noteSubmitted(tracked, remember);
     if (remember) this.inputLine.observe(tracked);
     this.writeShell(wire);
@@ -1550,7 +1712,7 @@ export class EasySshApp {
     const records = await this.host.listConnections();
     this.records = new Map(records.map((record) => [record.id, record]));
     const used = this.host.lastUsed?.() ?? {};
-    const items = records.map((record) => describe(record, records, used[record.id]));
+    const items = byGroup(records.map((record) => describe(record, records, used[record.id])));
     let selected = items.findIndex((item) => item.id === this.selectedId);
     if (selected < 0) {
       // Start on the connection used last, so Enter reconnects it.
@@ -1683,9 +1845,14 @@ export class EasySshApp {
     if (this.session !== session) return;
     const notes = [...(opened.notes ?? [])];
     if (opened.usedFallbackPath) notes.push('Remote path was not found. Opened your home directory');
+    this.forwards = [];
+    this.lastCommand = undefined;
+    if (this.extraForwards.id !== record.id) this.extraForwards = { id: record.id, specs: [] };
+    notes.push(...(await this.startForwards(session, [...(record.forwards ?? []), ...this.extraForwards.specs])));
+    if (this.session !== session) return;
     this.remote = { title: record.name, cwd: opened.cwd, entries, files };
     this.lastTitle = record.name;
-    this.host.setStatus(files ? `${record.name}:${opened.cwd}` : `${record.name} (terminal only)`);
+    this.folderStatus(files ? `${record.name}:${opened.cwd}` : `${record.name} (terminal only)`);
     this.host.setTitle?.(record.name);
     this.enterRaw(notes);
     const shell: ShellKind = opened.shell ?? 'unknown';
@@ -1727,6 +1894,7 @@ export class EasySshApp {
     this.session = null;
     this.remote = null;
     this.pieceQueue = [];
+    this.forwards = [];
     session?.close();
     this.leaveRaw();
     this.host.setTitle?.(undefined);
@@ -1851,6 +2019,9 @@ export class EasySshApp {
     if (target.kind === 'folder') can.add('upload');
     if (target.kind === 'file' && text && this.canEdit(session)) can.add('open');
     if (session.rename && this.host.askRename) can.add('rename');
+    if (target.kind === 'folder' && session.makeDir && this.host.askText) can.add('newFolder');
+    if (session.chmod && this.host.askText) can.add('chmod');
+    if (this.host.copyText) can.add('copyPath');
     if (session.remove && this.host.confirm) can.add('delete');
     return can;
   }
@@ -1884,6 +2055,16 @@ export class EasySshApp {
         return;
       case 'rename':
         await this.menuRename(session, epoch, target);
+        return;
+      case 'newFolder':
+        await this.menuNewFolder(session, epoch, target);
+        return;
+      case 'chmod':
+        await this.menuChmod(session, epoch, target);
+        return;
+      case 'copyPath':
+        await this.host.copyText?.(target.path);
+        this.flashStatus(`Copied ${target.path}`);
         return;
       case 'delete':
         await this.menuDelete(session, epoch, target);
@@ -2040,6 +2221,62 @@ export class EasySshApp {
     void this.enqueue(() => this.refreshCwd());
   }
 
+  /** New Folder: ask for a name, then create it inside the clicked folder. */
+  private async menuNewFolder(session: FileSession, epoch: number, target: ActionTarget): Promise<void> {
+    const makeDir = session.makeDir;
+    if (!makeDir || !this.host.askText) return;
+    const parent = target.linkTarget ?? target.path;
+    const check = async (value: string): Promise<string | undefined> => {
+      const problem = renameProblem(value, '');
+      if (problem) return problem;
+      if (session.exists && (await session.exists(remoteJoin(parent, value)).catch(() => false))) return `"${value}" already exists in ${parent}`;
+      return undefined;
+    };
+    const name = await this.host.askText({ title: `New folder — ${parent}`, prompt: 'Name of the new folder', validate: check });
+    if (name === undefined || !this.alive(session, epoch)) return;
+    const problem = await check(name);
+    if (problem) {
+      this.host.notify?.('error', `No folder created. ${problem}`);
+      return;
+    }
+    try {
+      await makeDir.call(session, remoteJoin(parent, name));
+    } catch (err) {
+      this.host.notify?.('error', `Could not create the folder. ${humanizeSshError(err)}`);
+      return;
+    }
+    this.host.log(`Created ${remoteJoin(parent, name)}`);
+    this.host.notify?.('info', `Created folder "${name}" in ${parent}`);
+    void this.enqueue(() => this.refreshCwd());
+  }
+
+  /** Permissions: show the current mode, take three or four octal digits, chmod over SFTP. */
+  private async menuChmod(session: FileSession, epoch: number, target: ActionTarget): Promise<void> {
+    const chmod = session.chmod;
+    if (!chmod || !this.host.askText) return;
+    const path = target.linkTarget ?? target.path;
+    const mode = session.stat ? await session.stat(path).then((found) => found.mode).catch(() => undefined) : undefined;
+    if (!this.alive(session, epoch)) return;
+    const current = mode === undefined ? undefined : formatMode(mode);
+    const typed = await this.host.askText({
+      title: `Permissions — ${target.name}`,
+      prompt: current ? `Now ${current}. Octal mode, e.g. 644 for files or 755 for folders` : 'Octal mode, e.g. 644 for files or 755 for folders',
+      value: current,
+      validate: (value) => (parseMode(value) === undefined ? 'Type 3 or 4 octal digits, e.g. 644' : undefined),
+    });
+    if (typed === undefined || !this.alive(session, epoch)) return;
+    const next = parseMode(typed);
+    if (next === undefined) return;
+    try {
+      await chmod.call(session, path, next);
+    } catch (err) {
+      this.host.notify?.('error', `Permissions not changed. ${humanizeSshError(err)}`);
+      return;
+    }
+    this.host.log(`chmod ${formatMode(next)} ${path}`);
+    this.host.notify?.('info', `Set "${target.name}" to ${formatMode(next)}`);
+  }
+
   /** Delete: count a folder's files, ask with the count, then delete over SFTP. */
   private async menuDelete(session: FileSession, epoch: number, target: ActionTarget): Promise<void> {
     const remove = session.remove;
@@ -2105,7 +2342,7 @@ export class EasySshApp {
   /** The status bar shows the connection and folder again. */
   private restoreStatus(): void {
     if (this.closed || !this.remote || this.transferAbort) return;
-    this.host.setStatus(this.remote.files ? `${this.remote.title}:${this.remote.cwd}` : `${this.remote.title} (terminal only)`);
+    this.folderStatus(this.remote.files ? `${this.remote.title}:${this.remote.cwd}` : `${this.remote.title} (terminal only)`);
   }
 
   /**
@@ -2135,7 +2372,7 @@ export class EasySshApp {
             : await session.download(remotePath, folder, name, options);
           const grew = result.grew ? ' (it grew while downloading)' : '';
           this.host.log(`Downloaded ${remotePath} to ${result.localPath}${grew}`);
-          this.finishTransfer(`Downloaded to ${result.localPath}`);
+          this.flashStatus(`Downloaded to ${result.localPath}`);
           if (where.menu) this.host.notify?.('info', `Downloaded ${name} to ${result.localPath}${grew}`);
           return;
         }
@@ -2144,7 +2381,7 @@ export class EasySshApp {
         const text = `Downloaded ${result.files} file${result.files === 1 ? '' : 's'} to ${result.localPath}${skipped}`;
         this.host.log(text);
         for (const item of result.skipped) this.host.log(`  skipped ${item.path} (${item.reason})`);
-        this.finishTransfer(text);
+        this.flashStatus(text);
         if (result.skipped.length > 0) {
           const kinds = [...new Set(result.skipped.map((item) => item.reason))].join(', ');
           this.host.notify?.('info', `${text} (${kinds}). The list is in the Easy SSH log.`);
@@ -2171,7 +2408,7 @@ export class EasySshApp {
       const picked = this.host.confirmUpload ? await this.host.confirmUpload(question) : undefined;
       if (epoch !== this.browseEpoch || !this.remote || this.session !== session) return;
       if (!picked) {
-        this.finishTransfer('Upload cancelled');
+        this.flashStatus('Upload cancelled');
         return;
       }
       cwd = picked;
@@ -2213,7 +2450,7 @@ export class EasySshApp {
             ? 'Nothing to upload'
             : `Uploaded ${result.uploaded} to ${target}${asUser}${extra}`;
           this.host.log(text);
-          this.finishTransfer(text);
+          this.flashStatus(text);
           if (stale && result.uploaded > 0) {
             const move = stale.kind === 'user' && names.length === 1
               ? ` To move it, run sudo mv ${shellQuote(remoteJoin(target, names[0]))} <folder> in the terminal.`
@@ -2289,7 +2526,7 @@ export class EasySshApp {
           const message = cancelled ? `Cancelled ${job.label}` : humanizeSshError(err);
           this.host.log(`${job.label} failed: ${message}`);
           if (err instanceof Error && !cancelled && !(err instanceof TransferError)) this.host.log(err.stack || err.message);
-          this.finishTransfer(message);
+          this.flashStatus(message);
           if (!cancelled) this.host.notify?.('error', `${job.direction === 'upload' ? 'Upload' : 'Download'} failed. ${message}`);
         }
       } finally {
@@ -2363,7 +2600,7 @@ export class EasySshApp {
       const entries = withParent(cwd, await this.session.list(cwd));
       if (epoch !== this.browseEpoch || !this.remote) return;
       this.remote = { ...this.remote, cwd, entries, lost: false };
-      if (!this.transferAbort) this.host.setStatus(`${this.remote.title}:${cwd}`);
+      if (!this.transferAbort) this.folderStatus(`${this.remote.title}:${cwd}`);
     } catch {
       // The shell can be in a directory SFTP is not allowed to read. Keep the previous list.
     }
@@ -2394,7 +2631,14 @@ export class EasySshApp {
     this.showNotice('ok', `Downloads go to ${shortenPath(picked, this.host.home(), 80)}`);
   }
 
-  private finishTransfer(text: string): void {
+  /** The status bar text of a connected shell, with the forwarded local ports. */
+  private folderStatus(text: string): void {
+    const ports = this.forwards.map((spec) => spec.localPort).join(', ');
+    this.host.setStatus(ports ? `${text} · ⇄ ${ports}` : text);
+  }
+
+  /** Show text in the status bar for a few seconds, then the folder again. */
+  private flashStatus(text: string): void {
     const remote = this.remote;
     if (!remote) return;
     this.host.setStatus(text);
@@ -2403,7 +2647,7 @@ export class EasySshApp {
     this.statusTimer = setTimeout(() => {
       this.statusTimer = undefined;
       if (this.closed || epoch !== this.browseEpoch || !this.remote || this.transferAbort) return;
-      this.host.setStatus(this.remote.files ? `${this.remote.title}:${this.remote.cwd}` : `${this.remote.title} (terminal only)`);
+      this.folderStatus(this.remote.files ? `${this.remote.title}:${this.remote.cwd}` : `${this.remote.title} (terminal only)`);
     }, 4000);
   }
 
@@ -2480,11 +2724,21 @@ function isInside(file: string, home: string): boolean {
   return target === root || target.startsWith(root + sep);
 }
 
+/** Ungrouped connections first, then each group by name. The order within stays. */
+export function byGroup(items: ConnectionItem[]): ConnectionItem[] {
+  const key = (item: ConnectionItem) => item.group ?? '';
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => key(a.item).localeCompare(key(b.item), 'en') || a.index - b.index)
+    .map((entry) => entry.item);
+}
+
 function slashTargets(items: ConnectionItem[]): SlashTarget[] {
   return items.map((item) => ({
     id: item.id,
     name: item.name,
     description: `${item.userHost} · ${item.detail}`,
+    search: `${item.userHost} ${item.group ?? ''}`,
   }));
 }
 

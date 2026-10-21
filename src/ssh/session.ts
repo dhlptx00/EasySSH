@@ -10,6 +10,7 @@ import type { TreeCount } from '../terminal/actions';
 import type { RemoteStat, RemoveOptions } from '../terminal/host';
 import { expandHome, safeFileName } from '../text';
 import type {
+  ForwardSpec,
   AuthMethod,
   BrowseEntry,
   ConnectionRecord,
@@ -22,6 +23,7 @@ import type {
   UploadOptions,
   UploadResult,
 } from '../types';
+import { listenForward, type ActiveForward } from './forward';
 import { AuthFailure, AuthPlanner, type AskAnswer, type AskRequest, type AuthEndpoint } from './auth';
 import { HostKeyDeclined, HostKeyError, TooManyFiles, TransferCancelled, TransferError, humanizeSshError, sftpCode } from './errors';
 import { decideHostKey, hopIds, type HostKeyPolicy } from './hostKeys';
@@ -525,6 +527,7 @@ export class SshSession {
   private closed = false;
   private shell: ClientChannel | null = null;
   private lastError: string | undefined;
+  private readonly forwards = new Map<number, ActiveForward>();
 
   constructor(
     private readonly clients: Client[],
@@ -558,6 +561,8 @@ export class SshSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    for (const active of this.forwards.values()) active.close();
+    this.forwards.clear();
     try {
       this.shell?.close();
     } catch {
@@ -658,6 +663,7 @@ export class SshSession {
       kind: stats.isDirectory() ? 'dir' : stats.isFile() ? 'file' : 'other',
       size: asCount(stats.size),
       mtime: asCount(stats.mtime) * 1000,
+      mode: typeof stats.mode === 'number' ? stats.mode : undefined,
     };
   }
 
@@ -800,6 +806,33 @@ export class SshSession {
   async makeDir(remotePath: string): Promise<void> {
     const sftp = this.files();
     await callbackOf<void>((done) => sftp.mkdir(remotePath, { mode: DEFAULT_DIR_MODE }, (err) => done(err, undefined)));
+  }
+
+  /** Set a file's or folder's permission bits. */
+  async chmod(remotePath: string, mode: number): Promise<void> {
+    const sftp = this.files();
+    await callbackOf<void>((done) => sftp.chmod(remotePath, mode, (err) => done(err, undefined)));
+  }
+
+  /** Start carrying 127.0.0.1:localPort to a port seen from the server. */
+  async forward(spec: ForwardSpec, log: (line: string) => void): Promise<void> {
+    if (this.forwards.has(spec.localPort)) throw new Error(`Local port ${spec.localPort} is already forwarded`);
+    const client = this.clients[this.clients.length - 1];
+    const active = await listenForward(spec, (host, port) => forward(client, host, port), log);
+    if (this.closed) {
+      active.close();
+      return;
+    }
+    this.forwards.set(spec.localPort, active);
+  }
+
+  /** Stop the forward on a local port. False when there was none. */
+  unforward(localPort: number): boolean {
+    const active = this.forwards.get(localPort);
+    if (!active) return false;
+    active.close();
+    this.forwards.delete(localPort);
+    return true;
   }
 
   private async statFull(remotePath: string): Promise<FullStat> {

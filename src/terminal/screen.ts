@@ -23,6 +23,8 @@ export interface ConnectionItem {
   jumpHosts?: string;
   askPassword?: boolean;
   startPath?: string;
+  /** The heading the list shows it under. */
+  group?: string;
 }
 
 /** The result of Test connection on the summary. */

@@ -153,4 +153,33 @@ describe('connection wizard', () => {
     assert.equal(sshCommand(key, '/Users/me'), "ssh -i ~/'.ssh/my key' u@h");
     assert.equal(fieldValue('jump', key), 'None, direct connection');
   });
+
+  it('edits forwards and a group from the summary, and keeps snippets through an edit', () => {
+    const record: ConnectionRecord = {
+      id: '1', name: 'prod', host: 'h', port: 22, username: 'u', auth: 'agent', jumps: [],
+      forwards: [{ localPort: 5432, remoteHost: 'db', remotePort: 5432 }], group: 'work', snippets: ['df -h'],
+    };
+    let draft = draftFromRecord(record, { password: false, passphrase: false });
+    assert.equal(draft.forwards, '5432:db:5432');
+    assert.equal(nextStep('jumpChoice', { ...draft, jumpMode: 'none' }), 'done', '/new does not walk the optional fields');
+    assert.match(applyStep('forwards', '3000, 99999', draft, ctx).error ?? '', /between 1 and 65535/);
+    draft = applyStep('forwards', '3000 , 8080:3000', draft, ctx).draft;
+    assert.equal(draft.forwards, '3000, 8080:3000');
+    assert.equal(fieldValue('forwards', draft), '3000, 8080:3000');
+    draft = applyStep('group', '  ops ', draft, ctx).draft;
+    assert.equal(fieldOf('group'), 'group');
+    let saved = toConnection(draft, '1').record;
+    assert.deepEqual(saved.forwards, [
+      { localPort: 3000, remoteHost: 'localhost', remotePort: 3000 },
+      { localPort: 8080, remoteHost: 'localhost', remotePort: 3000 },
+    ]);
+    assert.equal(saved.group, 'ops');
+    assert.deepEqual(saved.snippets, ['df -h']);
+    assert.match(sshCommand(draft), /-L 3000:localhost:3000 -L 8080:localhost:3000 u@h$/);
+    draft = applyStep('forwards', 'none', applyStep('group', 'none', draft, ctx).draft, ctx).draft;
+    saved = toConnection(draft, '1').record;
+    assert.equal(saved.forwards, undefined);
+    assert.equal(saved.group, undefined);
+    assert.match(applyStep('group', 'x'.repeat(33), draft, ctx).error ?? '', /32 characters/);
+  });
 });
