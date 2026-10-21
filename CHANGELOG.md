@@ -4,6 +4,12 @@ All notable changes to Easy SSH. Dates are in UTC+8.
 
 If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh&ssr=false#review-details) or [Open VSX](https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews) helps others find it.
 
+## [0.5.1] - 2026-10-22
+
+### Changed
+
+- README: updated screenshots and demo for the new file menu.
+
 ## [0.5.0] - 2026-10-21
 
 ### Added
@@ -207,6 +213,7 @@ If Easy SSH helps you, a rating on the [VS Code Marketplace](https://marketplace
 - Open a remote directory, click a file to download it, and drop local files to upload them.
 - Connect with a password, a private key, or an SSH agent, including one or more jump hosts.
 
+[0.5.1]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.5.1
 [0.5.0]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.5.0
 [0.4.5]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.5
 [0.4.4]: https://github.com/dhlptx00/EasySSH/releases/tag/v0.4.4
