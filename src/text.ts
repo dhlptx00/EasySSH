@@ -150,3 +150,8 @@ export function globMatch(pattern: string, value: string): boolean {
   }
   return new RegExp(`${source}$`, 'i').test(value);
 }
+
+/** The message of a thrown value. */
+export function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}

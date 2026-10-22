@@ -8,7 +8,7 @@ import { NameSet, reserveLocalTarget, numberedName } from '../localTarget';
 import { normalizeRemote, remoteBasename, remoteDirname, remoteJoin } from '../remotePath';
 import type { TreeCount } from '../terminal/actions';
 import type { RemoteStat, RemoveOptions } from '../terminal/host';
-import { expandHome, safeFileName } from '../text';
+import { expandHome, safeFileName, errorText } from '../text';
 import type {
   ForwardSpec,
   AuthMethod,
@@ -357,6 +357,18 @@ function probeShell(client: Client, timeoutMs = 3000): Promise<string | undefine
   });
 }
 
+/** A Node-style callback with no value, as a promise. */
+function voidOf(run: (done: (err?: Error | null) => void) => void): Promise<void> {
+  return callbackOf<void>((done) => run((err) => done(err, undefined)));
+}
+
+/** Create a local folder (and its parents) for a download. */
+async function makeLocalFolder(folder: string): Promise<void> {
+  await fs.promises.mkdir(folder, { recursive: true }).catch((err: unknown) => {
+    throw new TransferError('Cannot create folder', folder, 'local', err);
+  });
+}
+
 function callbackOf<T>(run: (done: (err: Error | null | undefined, value: T) => void) => void): Promise<T> {
   return new Promise((resolve, reject) => {
     run((err, value) => {
@@ -628,9 +640,7 @@ export class SshSession {
    * hidden .part file with the remote permission bits, then it is renamed.
    */
   async download(remotePath: string, folder: string, name: string, options: TransferOptions): Promise<DownloadResult> {
-    await fs.promises.mkdir(folder, { recursive: true }).catch((err: unknown) => {
-      throw new TransferError('Cannot create folder', folder, 'local', err);
-    });
+    await makeLocalFolder(folder);
     const target = reserveLocalTarget(folder, safeFileName(name), 'file');
     try {
       const progress: TransferProgress = { phase: 'copy', bytes: 0, totalBytes: 0, files: 0, totalFiles: 1, current: name };
@@ -647,9 +657,7 @@ export class SshSession {
    */
   async downloadTo(remotePath: string, localPath: string, options: TransferOptions): Promise<DownloadResult> {
     const folder = path.dirname(localPath);
-    await fs.promises.mkdir(folder, { recursive: true }).catch((err: unknown) => {
-      throw new TransferError('Cannot create folder', folder, 'local', err);
-    });
+    await makeLocalFolder(folder);
     const progress: TransferProgress = { phase: 'copy', bytes: 0, totalBytes: 0, files: 0, totalFiles: 1, current: path.basename(localPath) };
     const result = await this.fetchFile(remotePath, localPath, progress, options);
     return { localPath, bytes: result.bytes, grew: result.grew };
@@ -657,8 +665,7 @@ export class SshSession {
 
   /** What a path is, following symlinks. */
   async stat(remotePath: string): Promise<RemoteStat> {
-    const sftp = this.files();
-    const stats = await callbackOf<import('ssh2').Stats>((done) => sftp.stat(remotePath, (err, found) => done(err, found)));
+    const stats = await this.rawStat(remotePath);
     return {
       kind: stats.isDirectory() ? 'dir' : stats.isFile() ? 'file' : 'other',
       size: asCount(stats.size),
@@ -785,11 +792,11 @@ export class SshSession {
         // Replacing the file would give it our owner or group: rewrite it in place instead.
         await sftpClose(sftp, handle);
         handle = undefined;
-        await callbackOf<void>((done) => raw.unlink(temp, (err) => done(err, undefined))).catch(() => undefined);
+        await voidOf((done) => raw.unlink(temp, done)).catch(() => undefined);
         await inPlace(target);
         return this.stat(remotePath);
       }
-      if (sftp.fchmod) await callbackOf<void>((done) => sftp.fchmod?.(handle as Buffer, mode, (err) => done(err, undefined))).catch(() => undefined);
+      if (sftp.fchmod) await voidOf((done) => sftp.fchmod?.(handle as Buffer, mode, done)).catch(() => undefined);
       await put(handle);
       await sftpClose(sftp, handle);
       handle = undefined;
@@ -797,7 +804,7 @@ export class SshSession {
       moved = true;
     } finally {
       if (handle) await sftpClose(sftp, handle);
-      if (!moved) await callbackOf<void>((done) => raw.unlink(temp, (err) => done(err, undefined))).catch(() => undefined);
+      if (!moved) await voidOf((done) => raw.unlink(temp, done)).catch(() => undefined);
     }
     return this.stat(remotePath);
   }
@@ -805,13 +812,13 @@ export class SshSession {
   /** Create one folder. */
   async makeDir(remotePath: string): Promise<void> {
     const sftp = this.files();
-    await callbackOf<void>((done) => sftp.mkdir(remotePath, { mode: DEFAULT_DIR_MODE }, (err) => done(err, undefined)));
+    await voidOf((done) => sftp.mkdir(remotePath, { mode: DEFAULT_DIR_MODE }, done));
   }
 
   /** Set a file's or folder's permission bits. */
   async chmod(remotePath: string, mode: number): Promise<void> {
     const sftp = this.files();
-    await callbackOf<void>((done) => sftp.chmod(remotePath, mode, (err) => done(err, undefined)));
+    await voidOf((done) => sftp.chmod(remotePath, mode, done));
   }
 
   /** Start carrying 127.0.0.1:localPort to a port seen from the server. */
@@ -835,10 +842,13 @@ export class SshSession {
     return true;
   }
 
-  private async statFull(remotePath: string): Promise<FullStat> {
+  private rawStat(remotePath: string): Promise<import('ssh2').Stats> {
     const sftp = this.files();
-    const stats = await callbackOf<import('ssh2').Stats>((done) => sftp.stat(remotePath, (err, found) => done(err, found)));
-    return fullStat(stats);
+    return callbackOf((done) => sftp.stat(remotePath, (err, found) => done(err, found)));
+  }
+
+  private async statFull(remotePath: string): Promise<FullStat> {
+    return fullStat(await this.rawStat(remotePath));
   }
 
   private async fstatFull(handle: Buffer): Promise<FullStat> {
@@ -853,7 +863,7 @@ export class SshSession {
     if (await this.exists(to)) {
       throw new TransferError('Cannot rename', from, 'remote', new Error(`${remoteBasename(to)} already exists`));
     }
-    await callbackOf<void>((done) => sftp.rename(from, to, (err) => done(err, undefined))).catch((err: unknown) => {
+    await voidOf((done) => sftp.rename(from, to, done)).catch((err: unknown) => {
       throw new TransferError('Cannot rename', from, 'remote', err);
     });
   }
@@ -876,7 +886,7 @@ export class SshSession {
     const tick = () => options.onProgress?.(files + folders);
     const unlink = async (file: string) => {
       if (options.signal.aborted) throw new TransferCancelled();
-      await callbackOf<void>((done) => sftp.unlink(file, (err) => done(err, undefined))).catch((err: unknown) => {
+      await voidOf((done) => sftp.unlink(file, done)).catch((err: unknown) => {
         throw new TransferError('Cannot delete', file, 'remote', err);
       });
       files += 1;
@@ -907,7 +917,7 @@ export class SshSession {
       await Promise.all(Array.from({ length: Math.min(8, plain.length) }, worker));
       for (const sub of subfolders) await walk(sub);
       if (options.signal.aborted) throw new TransferCancelled();
-      await callbackOf<void>((done) => sftp.rmdir(dir, (err) => done(err, undefined))).catch((err: unknown) => {
+      await voidOf((done) => sftp.rmdir(dir, done)).catch((err: unknown) => {
         throw new TransferError('Cannot delete folder', dir, 'remote', err);
       });
       folders += 1;
@@ -1018,9 +1028,7 @@ export class SshSession {
     });
     if (!topStat.isDirectory()) throw new TransferError('Cannot download', remotePath, 'remote', new Error('not a folder'));
 
-    await fs.promises.mkdir(folder, { recursive: true }).catch((err: unknown) => {
-      throw new TransferError('Cannot create folder', folder, 'local', err);
-    });
+    await makeLocalFolder(folder);
     const target = reserveLocalTarget(folder, safeFileName(name), 'folder');
     const temp = path.join(folder, `.${path.basename(target.path)}.${partSuffix()}.part`);
     try {
@@ -1196,7 +1204,7 @@ export class SshSession {
     try {
       // open() only applies the mode to a new file; an existing one keeps its own.
       if (sftp.fchmod) {
-        await callbackOf<void>((done) => sftp.fchmod?.(handle, file.mode, (err) => done(err, undefined))).catch(() => undefined);
+        await voidOf((done) => sftp.fchmod?.(handle, file.mode, done)).catch(() => undefined);
       }
       local = await fs.promises.open(file.local, 'r').catch((err: unknown) => {
         throw new TransferError('Cannot read', file.local, 'local', err);
@@ -1233,22 +1241,22 @@ export class SshSession {
     const posix = (sftp as unknown as { ext_openssh_rename?: SFTPWrapper['ext_openssh_rename'] }).ext_openssh_rename;
     if (typeof posix === 'function') {
       try {
-        await callbackOf<void>((done) => posix.call(sftp, from, to, (err) => done(err, undefined)));
+        await voidOf((done) => posix.call(sftp, from, to, done));
         return;
       } catch {
         // Not offered by this server; fall through.
       }
     }
     try {
-      await callbackOf<void>((done) => sftp.rename(from, to, (err) => done(err, undefined)));
+      await voidOf((done) => sftp.rename(from, to, done));
       return;
     } catch (err) {
       if (!(await this.exists(to))) throw new TransferError('Cannot save', to, 'remote', err);
     }
-    await callbackOf<void>((done) => sftp.unlink(to, (err) => done(err, undefined))).catch((err: unknown) => {
+    await voidOf((done) => sftp.unlink(to, done)).catch((err: unknown) => {
       throw new TransferError('Cannot replace', to, 'remote', err);
     });
-    await callbackOf<void>((done) => sftp.rename(from, to, (err) => done(err, undefined))).catch((err: unknown) => {
+    await voidOf((done) => sftp.rename(from, to, done)).catch((err: unknown) => {
       throw new TransferError('Cannot save', to, 'remote', err);
     });
   }
@@ -1495,7 +1503,7 @@ export async function openSession(options: OpenSessionOptions): Promise<OpenedSe
         notes.push(`Trusted the host key of ${hostLabel(key.host, key.port)} (${formatFingerprintShort(key.fingerprint)})`);
         if (options.writeKnownHost) {
           await options.writeKnownHost(knownHostsLine(key.host, key.port, key.key)).catch((err: unknown) => {
-            options.log(`Could not add ${key.host} to ~/.ssh/known_hosts: ${err instanceof Error ? err.message : String(err)}`);
+            options.log(`Could not add ${key.host} to ~/.ssh/known_hosts: ${errorText(err)}`);
           });
         }
       }
@@ -1503,7 +1511,7 @@ export async function openSession(options: OpenSessionOptions): Promise<OpenedSe
     const finalClient = clients[clients.length - 1];
     const [sftp, probed] = await Promise.all([
       openSftp(finalClient).catch((err: unknown) => {
-        options.log(`SFTP is not available: ${err instanceof Error ? err.message : String(err)}`);
+        options.log(`SFTP is not available: ${errorText(err)}`);
         return null;
       }),
       probeShell(finalClient),

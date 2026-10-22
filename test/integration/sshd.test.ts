@@ -447,7 +447,7 @@ describe('real sshd', { skip }, () => {
         return pick;
       },
       confirm: async () => true,
-      askRename: async () => undefined,
+      askText: async () => undefined,
       openRemoteFile: async (remotePath) => {
         openedFiles.push(remotePath);
       },
@@ -487,11 +487,11 @@ describe('real sshd', { skip }, () => {
       type(`printf 'x\\n' > notes.txt && printf 'FROM debian\\n' > Dockerfile && printf 'plain words\\n' > memo && printf '\\177ELF\\0\\0\\1' > tool && head -c 16 /dev/urandom > backup.tar.gz && head -c 6291456 /dev/zero | tr '\\0' 'a' > big.log && mv memo memo2`);
       await until(() => app.linkFor('memo2').length === 1 && app.linkFor('big.log').length === 1, 'new names are links without a cd');
       assert.deepEqual(app.linkFor('memo'), []);
-      assert.deepEqual(await menuFor('notes.txt'), ['download', 'open', 'rename', 'delete']);
-      assert.deepEqual(await menuFor('Dockerfile'), ['download', 'open', 'rename', 'delete']);
-      assert.deepEqual(await menuFor('memo2'), ['download', 'open', 'rename', 'delete'], 'sniffed: text');
-      assert.deepEqual(await menuFor('tool'), ['download', 'rename', 'delete'], 'sniffed: NUL bytes');
-      assert.deepEqual(await menuFor('backup.tar.gz'), ['download', 'rename', 'delete'], 'binary by name');
+      assert.deepEqual(await menuFor('notes.txt'), ['download', 'open', 'rename', 'chmod', 'delete']);
+      assert.deepEqual(await menuFor('Dockerfile'), ['download', 'open', 'rename', 'chmod', 'delete']);
+      assert.deepEqual(await menuFor('memo2'), ['download', 'open', 'rename', 'chmod', 'delete'], 'sniffed: text');
+      assert.deepEqual(await menuFor('tool'), ['download', 'rename', 'chmod', 'delete'], 'sniffed: NUL bytes');
+      assert.deepEqual(await menuFor('backup.tar.gz'), ['download', 'rename', 'chmod', 'delete'], 'binary by name');
       pick = 'open';
       await menuFor('notes.txt');
       await until(() => openedFiles.length === 1, 'opened');

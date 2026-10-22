@@ -1,3 +1,4 @@
+import { errorText } from '../text';
 import net from 'net';
 import type { Duplex } from 'stream';
 import type { ForwardSpec } from '../types';
@@ -79,7 +80,7 @@ export function listenForward(spec: ForwardSpec, open: OpenTunnel, log: (line: s
         socket.resume();
       },
       (err: unknown) => {
-        log(`Forward ${formatForward(spec)}: ${err instanceof Error ? err.message : String(err)}`);
+        log(`Forward ${formatForward(spec)}: ${errorText(err)}`);
         socket.destroy();
       },
     );
