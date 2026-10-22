@@ -12,7 +12,7 @@ import type { HostKeyPolicy } from './ssh/hostKeys';
 import { ConnectionStore } from './store';
 import { EasySshApp } from './terminal/app';
 import { shortRemote, type ActionMenu, type FileAction } from './terminal/actions';
-import type { AppHost, ProgressHandle, RenameRequest } from './terminal/host';
+import type { AppHost, ProgressHandle } from './terminal/host';
 import { EasySshPty } from './terminal/pty';
 import type { LineLink } from './terminal/render';
 import { RemoteFiles, overwriteText, type EditorSession, type EditorTarget, type OverwriteQuestion } from './remoteFiles';
@@ -548,16 +548,6 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
     return picked.map((uri) => uri.fsPath);
   }
 
-  private async askRename(request: RenameRequest): Promise<string | undefined> {
-    return vscode.window.showInputBox({
-      title: `Rename ${request.kind} — ${request.parent}`,
-      prompt: `New name for "${request.name}"`,
-      value: request.name,
-      valueSelection: request.selection,
-      validateInput: (value) => request.validate(value),
-    });
-  }
-
   /** Remote files in editor tabs, read and saved through each terminal's session. */
   readonly remoteFiles = new RemoteFiles(
     (authority) => this.editorTarget(authority),
@@ -611,8 +601,7 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
   private async askOverwrite(question: OverwriteQuestion): Promise<boolean> {
     const text = overwriteText(question);
     const action = question.now ? 'Overwrite' : 'Save';
-    const picked = await vscode.window.showWarningMessage(text.message, { modal: true, detail: text.detail }, action);
-    return picked === action;
+    return this.confirm(text.message, text.detail, action);
   }
 
   private async choose(message: string, detail: string, answers: string[]): Promise<string | undefined> {
@@ -736,12 +725,12 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
       pickSaveFile: (folder, name) => this.pickSaveFile(folder, name),
       pickDownloadParent: (folder, name) => this.pickDownloadParent(folder, name),
       pickUploadFiles: (remoteDir) => this.pickUploadFiles(remoteDir),
-      askRename: (request) => this.askRename(request),
       askText: (request) => Promise.resolve(vscode.window.showInputBox({
         title: request.title,
         prompt: request.prompt,
         value: request.value,
         placeHolder: request.placeholder,
+        valueSelection: request.selection,
         validateInput: request.validate,
       })),
       pickItem: async (title, placeholder, items) => {

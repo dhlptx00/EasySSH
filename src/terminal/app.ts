@@ -27,7 +27,7 @@ import {
   type FileAction,
   type TreeCount,
 } from './actions';
-import { safeFileName, shortenPath } from '../text';
+import { safeFileName, shortenPath, errorText } from '../text';
 import { classifyName, looksLikeText, SNIFF_BYTES } from '../fileTypes';
 import type { BrowseEntry, ConflictChoice, ConnectionRecord, ForwardSpec, Notice, TransferProgress } from '../types';
 import type { AppHost, FileSession, ProgressHandle } from './host';
@@ -995,7 +995,7 @@ export class EasySshApp {
       if (abort.signal.aborted || err instanceof TransferCancelled) back(false, 'Test cancelled');
       else if (err instanceof HostKeyDeclined) back(false, `Host key of ${err.host} was not trusted`);
       else {
-        this.host.log(err instanceof Error ? err.message : String(err));
+        this.host.log(errorText(err));
         back(false, `Test failed: ${humanizeSshError(err)}`);
       }
     } finally {
@@ -1261,7 +1261,7 @@ export class EasySshApp {
         this.forwards.push(spec);
         lines.push(`Forwarding localhost:${spec.localPort} → ${spec.remoteHost}:${spec.remotePort}`);
       } catch (err) {
-        lines.push(`Port ${spec.localPort} not forwarded: ${err instanceof Error ? err.message : String(err)}`);
+        lines.push(`Port ${spec.localPort} not forwarded: ${errorText(err)}`);
       }
     }
     return lines;
@@ -1279,7 +1279,7 @@ export class EasySshApp {
     try {
       spec = parseForward(text);
     } catch (err) {
-      this.flashStatus(err instanceof Error ? err.message : String(err));
+      this.flashStatus(errorText(err));
       return;
     }
     if (!session.forward) return;
@@ -1652,7 +1652,7 @@ export class EasySshApp {
       const entries = await session.list(query.dir);
       suffix = completionSuffix(query.prefix, entries, query.dirsOnly);
     } catch (err) {
-      this.host.log(err instanceof Error ? err.message : String(err));
+      this.host.log(errorText(err));
       suffix = null;
     }
     if (!this.sameTab(epoch, snapshot, session)) return;
@@ -1679,7 +1679,7 @@ export class EasySshApp {
     try {
       this.session?.writeShell(data);
     } catch (err) {
-      this.host.log(err instanceof Error ? err.message : String(err));
+      this.host.log(errorText(err));
     }
   }
 
@@ -1797,7 +1797,7 @@ export class EasySshApp {
       await this.showConnections({ tone: 'info', text: `Host key of ${err.host} was not trusted. Not connected` });
       return;
     }
-    this.host.log(err instanceof Error ? err.message : String(err));
+    this.host.log(errorText(err));
     if (this.lostRecord) {
       await this.connectionLost(humanizeSshError(err), true);
       return;
@@ -2018,7 +2018,7 @@ export class EasySshApp {
     const can = new Set<FileAction>(['download']);
     if (target.kind === 'folder') can.add('upload');
     if (target.kind === 'file' && text && this.canEdit(session)) can.add('open');
-    if (session.rename && this.host.askRename) can.add('rename');
+    if (session.rename && this.host.askText) can.add('rename');
     if (target.kind === 'folder' && session.makeDir && this.host.askText) can.add('newFolder');
     if (session.chmod && this.host.askText) can.add('chmod');
     if (this.host.copyText) can.add('copyPath');
@@ -2043,37 +2043,22 @@ export class EasySshApp {
     const picked = await host.showActionMenu(menu, this.describeTarget(session, target));
     if (!picked || !this.alive(session, epoch)) return;
     this.host.log(`${picked} ${target.path}`);
-    switch (picked) {
-      case 'download':
-        await this.menuDownload(session, epoch, target);
-        return;
-      case 'upload':
-        await this.menuUpload(session, epoch, target);
-        return;
-      case 'open':
-        await this.menuOpen(session, epoch, target);
-        return;
-      case 'rename':
-        await this.menuRename(session, epoch, target);
-        return;
-      case 'newFolder':
-        await this.menuNewFolder(session, epoch, target);
-        return;
-      case 'chmod':
-        await this.menuChmod(session, epoch, target);
-        return;
-      case 'copyPath':
-        await this.host.copyText?.(target.path);
-        this.flashStatus(`Copied ${target.path}`);
-        return;
-      case 'delete':
-        await this.menuDelete(session, epoch, target);
-        return;
-      default: {
-        const unreachable: never = picked;
-        return unreachable;
-      }
-    }
+    const run: Record<FileAction, () => Promise<void>> = {
+      download: () => this.menuDownload(session, epoch, target),
+      upload: () => this.menuUpload(session, epoch, target),
+      open: () => this.menuOpen(session, epoch, target),
+      rename: () => this.menuRename(session, epoch, target),
+      newFolder: () => this.menuNewFolder(session, epoch, target),
+      chmod: () => this.menuChmod(session, epoch, target),
+      copyPath: () => this.copyPath(target.path),
+      delete: () => this.menuDelete(session, epoch, target),
+    };
+    await run[picked]();
+  }
+
+  private async copyPath(path: string): Promise<void> {
+    await this.host.copyText?.(path);
+    this.flashStatus(`Copied ${path}`);
   }
 
   /** A better menu placeholder once cheap facts are in: a folder's item count, a link's size. */
@@ -2176,7 +2161,7 @@ export class EasySshApp {
     try {
       await open.call(this.host, target.path);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorText(err);
       this.host.log(`Could not open ${target.path}: ${message}`);
       this.host.notify?.('error', `Could not open ${target.name}. ${message}`);
     }
@@ -2185,18 +2170,13 @@ export class EasySshApp {
   /** Rename: ask for the new name, confirm, then rename over SFTP. */
   private async menuRename(session: FileSession, epoch: number, target: ActionTarget): Promise<void> {
     const rename = session.rename;
-    if (!rename || !this.host.askRename) return;
+    if (!rename || !this.host.askText) return;
     const parent = remoteDirname(target.path);
-    const check = async (value: string): Promise<string | undefined> => {
-      const problem = renameProblem(value, target.name);
-      if (problem) return problem;
-      if (session.exists && (await session.exists(remoteJoin(parent, value)).catch(() => false))) return `"${value}" already exists in ${parent}`;
-      return undefined;
-    };
-    const next = await this.host.askRename({
-      name: target.name,
-      kind: target.kind,
-      parent,
+    const check = this.nameCheck(session, parent, target.name);
+    const next = await this.host.askText({
+      title: `Rename ${target.kind} — ${parent}`,
+      prompt: `New name for "${target.name}"`,
+      value: target.name,
       selection: renameSelection(target.name, target.kind),
       validate: check,
     });
@@ -2221,17 +2201,22 @@ export class EasySshApp {
     void this.enqueue(() => this.refreshCwd());
   }
 
+  /** Validates a new name in parent: a valid name, other than current, that is not taken. */
+  private nameCheck(session: FileSession, parent: string, current: string): (value: string) => Promise<string | undefined> {
+    return async (value) => {
+      const problem = renameProblem(value, current);
+      if (problem) return problem;
+      if (session.exists && (await session.exists(remoteJoin(parent, value)).catch(() => false))) return `"${value}" already exists in ${parent}`;
+      return undefined;
+    };
+  }
+
   /** New Folder: ask for a name, then create it inside the clicked folder. */
   private async menuNewFolder(session: FileSession, epoch: number, target: ActionTarget): Promise<void> {
     const makeDir = session.makeDir;
     if (!makeDir || !this.host.askText) return;
     const parent = target.linkTarget ?? target.path;
-    const check = async (value: string): Promise<string | undefined> => {
-      const problem = renameProblem(value, '');
-      if (problem) return problem;
-      if (session.exists && (await session.exists(remoteJoin(parent, value)).catch(() => false))) return `"${value}" already exists in ${parent}`;
-      return undefined;
-    };
+    const check = this.nameCheck(session, parent, '');
     const name = await this.host.askText({ title: `New folder — ${parent}`, prompt: 'Name of the new folder', validate: check });
     if (name === undefined || !this.alive(session, epoch)) return;
     const problem = await check(name);

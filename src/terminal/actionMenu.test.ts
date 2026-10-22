@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import type { BrowseEntry } from '../types';
 import type { ActionMenu, FileAction, TreeCount } from './actions';
 import { EasySshApp } from './app';
-import type { AppHost, ProgressHandle, RenameRequest } from './host';
+import type { AppHost, ProgressHandle, TextRequest } from './host';
 import { fakeRemote, flush, sleep, type FakeRemote } from './testHost';
 
 const HOME = '/home/demo/project';
@@ -51,7 +51,7 @@ interface Rig {
   saves: [string, string][];
   parents: [string, string][];
   uploadPickers: string[];
-  renames: RenameRequest[];
+  renames: TextRequest[];
   confirms: { message: string; detail: string; action: string }[];
   downloadsTo: [string, string][];
   renamed: [string, string][];
@@ -142,7 +142,7 @@ async function rig(script: Script = {}, options: { count?: TreeCount; existing?:
       state.uploadPickers.push(dir);
       return state.script.uploads;
     },
-    askRename: async (request) => {
+    askText: async (request) => {
       state.renames.push(request);
       return state.script.rename;
     },
@@ -362,12 +362,13 @@ describe('Rename from the menu', () => {
     const r = await rig({ pick: 'rename', rename: 'todo.txt', confirms: [true] }, { existing: [`${HOME}/logs`] });
     await click(r, `${HOME}/notes.txt`);
     const request = r.renames[0];
-    assert.equal(request.name, 'notes.txt');
+    assert.equal(request.value, 'notes.txt');
+    assert.equal(request.title, `Rename file — ${HOME}`);
     assert.deepEqual(request.selection, [0, 5]);
-    assert.equal(await request.validate('notes.txt'), 'Enter a different name');
-    assert.equal(await request.validate('a/b'), 'A name cannot contain /');
-    assert.equal(await request.validate('logs'), `"logs" already exists in ${HOME}`);
-    assert.equal(await request.validate('todo.txt'), undefined);
+    assert.equal(await request.validate?.('notes.txt'), 'Enter a different name');
+    assert.equal(await request.validate?.('a/b'), 'A name cannot contain /');
+    assert.equal(await request.validate?.('logs'), `"logs" already exists in ${HOME}`);
+    assert.equal(await request.validate?.('todo.txt'), undefined);
     assert.deepEqual(r.confirms, [{ message: 'Rename "notes.txt" to "todo.txt"?', detail: `In ${HOME}`, action: 'Rename' }]);
     assert.deepEqual(r.renamed, [[`${HOME}/notes.txt`, `${HOME}/todo.txt`]]);
     assert.deepEqual(r.remote.notes.at(-1), { tone: 'info', text: 'Renamed "notes.txt" to "todo.txt"' });

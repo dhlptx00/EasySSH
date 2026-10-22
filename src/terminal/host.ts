@@ -79,23 +79,14 @@ export interface RemoveOptions {
 }
 
 /** The rename box: the old name and a check of each typed name. */
-export interface RenameRequest {
-  name: string;
-  kind: 'file' | 'folder';
-  /** The folder it is in. */
-  parent: string;
-  /** The part of the name selected at first: the name without its extension. */
-  selection: [number, number];
-  /** An error to show for the typed name, or undefined when it can be used. */
-  validate(value: string): Promise<string | undefined>;
-}
-
 /** A one-line input box. */
 export interface TextRequest {
   title: string;
   prompt: string;
   value?: string;
   placeholder?: string;
+  /** The part of value selected at first, e.g. a file name without its extension. */
+  selection?: [number, number];
   /** An error to show for the typed text, or undefined when it can be used. */
   validate?(value: string): string | undefined | Promise<string | undefined>;
 }
@@ -190,8 +181,6 @@ export interface AppHost {
   pickDownloadParent?(folder: string, name: string): Promise<string | undefined>;
   /** A file picker for an upload into remoteDir on the server. */
   pickUploadFiles?(remoteDir: string): Promise<string[] | undefined>;
-  /** Ask for a new name. Undefined when cancelled. */
-  askRename?(request: RenameRequest): Promise<string | undefined>;
   /** Ask for one line of text. Undefined when cancelled. */
   askText?(request: TextRequest): Promise<string | undefined>;
   /** A quick pick of rows. The chosen index, or undefined when cancelled. */

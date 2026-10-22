@@ -28,7 +28,6 @@ describe('connection wizard', () => {
     draft = applyStep('keyPath', '~/.ssh/id_ed25519', draft, ctx).draft;
     assert.equal(draft.keyPath, '/Users/me/.ssh/id_ed25519');
     draft = applyStep('passphrase', '', draft, ctx).draft;
-    draft = applyStep('startPath', 'home', draft, ctx).draft;
     draft = applyStep('jump', 'jump@10.0.0.1:2222', draft, ctx).draft;
 
     const { record, secret } = toConnection(draft, 'id-1');

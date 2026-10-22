@@ -14,8 +14,6 @@ export type Step =
   | 'password'
   | 'keyPath'
   | 'passphrase'
-  | 'startPathChoice'
-  | 'startPath'
   | 'jumpChoice'
   | 'jump'
   | 'forwards'
@@ -34,9 +32,8 @@ export interface Draft {
   keyPath: string;
   passphrase: string;
   keepPassphrase: boolean;
+  /** Kept from the saved connection; empty is the home directory. */
   startPath: string;
-  /** home opens the remote home directory. custom asks for a path. */
-  startMode: '' | 'home' | 'custom';
   jump: string;
   /** none connects directly. custom asks for user@host:port. */
   jumpMode: '' | 'none' | 'custom';
@@ -74,7 +71,6 @@ export function emptyDraft(): Draft {
     passphrase: '',
     keepPassphrase: false,
     startPath: '',
-    startMode: '',
     jump: '',
     jumpMode: '',
     hasSavedPassword: false,
@@ -104,7 +100,6 @@ export function draftFromRecord(
     passwordMode: record.auth === 'password' ? (record.askPassword ? 'ask' : 'save') : '',
     keyPath: record.privateKeyPath ?? '',
     startPath: record.startPath ?? '',
-    startMode: record.startPath ? 'custom' : 'home',
     jump,
     jumpMode: record.jumps.length ? 'custom' : 'none',
     hasSavedPassword: saved.password,
@@ -143,10 +138,6 @@ export function nextStep(step: Step, draft: Draft): Step | 'done' {
       return 'passphrase';
     case 'passphrase':
       return 'jumpChoice';
-    case 'startPathChoice':
-      return draft.startMode === 'custom' ? 'startPath' : 'jumpChoice';
-    case 'startPath':
-      return 'jumpChoice';
     case 'jumpChoice':
       return draft.jumpMode === 'custom' ? 'jump' : 'done';
     case 'jump':
@@ -182,12 +173,6 @@ export function prevStep(step: Step, draft: Draft): Step | 'start' {
       return 'auth';
     case 'passphrase':
       return 'keyPath';
-    case 'startPathChoice':
-      if (draft.auth === 'password') return draft.passwordMode === 'ask' ? 'passwordMode' : 'password';
-      if (draft.auth === 'privateKey') return 'passphrase';
-      return 'auth';
-    case 'startPath':
-      return 'startPathChoice';
     case 'jumpChoice':
       if (draft.auth === 'password') return draft.passwordMode === 'ask' ? 'passwordMode' : 'password';
       if (draft.auth === 'privateKey') return 'passphrase';
@@ -255,15 +240,6 @@ export function promptFor(step: Step, draft: Draft): Prompt {
         masked: true,
         fallback: '',
       };
-    case 'startPathChoice':
-      return { label: 'remote path', hint: 'Choose where the session opens', masked: false, fallback: '' };
-    case 'startPath':
-      return {
-        label: 'remote path',
-        hint: 'Absolute path on the server, such as /var/www',
-        masked: false,
-        fallback: draft.startPath,
-      };
     case 'jumpChoice':
       return { label: 'jump host', hint: 'Choose a direct connection or a jump host', masked: false, fallback: '' };
     case 'jump':
@@ -310,10 +286,6 @@ export function stepValue(step: Step, draft: Draft): string {
     case 'passphrase':
       if (draft.passphrase) return '••••';
       return draft.keepPassphrase ? '(saved)' : '(none)';
-    case 'startPathChoice':
-      return draft.startMode === 'custom' ? 'Custom path' : 'Home directory';
-    case 'startPath':
-      return draft.startPath || '(home)';
     case 'jumpChoice':
       return draft.jumpMode === 'custom' ? 'Jump host' : 'No jump host';
     case 'jump':
@@ -350,12 +322,6 @@ export function choiceOptions(step: Step): ChoiceOption[] | null {
       { id: 'ask', label: 'Ask each time', hint: 'Nothing is stored; type it when you connect' },
     ];
   }
-  if (step === 'startPathChoice') {
-    return [
-      { id: 'home', label: 'Home directory', hint: 'Open your home directory on the server' },
-      { id: 'custom', label: 'Custom path', hint: 'Type an absolute remote path' },
-    ];
-  }
   if (step === 'jumpChoice') {
     return [
       { id: 'none', label: 'No jump host', hint: 'Connect directly' },
@@ -372,9 +338,7 @@ export function choiceIndex(step: Step, draft: Draft): number {
     ? draft.auth
     : step === 'passwordMode'
       ? draft.passwordMode || 'save'
-      : step === 'startPathChoice'
-        ? draft.startMode
-        : draft.jumpMode;
+      : draft.jumpMode;
   const index = options.findIndex((option) => option.id === id);
   return index >= 0 ? index : 0;
 }
@@ -392,11 +356,6 @@ export function applyChoice(step: Step, optionId: string, draft: Draft): { draft
   }
   if (step === 'passwordMode') {
     next.passwordMode = option.id === 'ask' ? 'ask' : 'save';
-    return { draft: next };
-  }
-  if (step === 'startPathChoice') {
-    next.startMode = option.id === 'custom' ? 'custom' : 'home';
-    if (next.startMode === 'home') next.startPath = '';
     return { draft: next };
   }
   next.jumpMode = option.id === 'custom' ? 'custom' : 'none';
@@ -497,16 +456,6 @@ export function applyStep(step: Step, typed: string, draft: Draft, ctx: ApplyCon
   if (step === 'passphrase') {
     next.passphrase = typed;
     next.keepPassphrase = typed.length === 0 && draft.hasSavedPassphrase && next.keyPath === draft.originalKeyPath;
-    return { draft: next };
-  }
-
-  if (step === 'startPath') {
-    let startPath = value.trim();
-    if (startPath === 'home' || startPath === '~') startPath = '';
-    if (startPath && !startPath.startsWith('/') && !startPath.startsWith('~')) {
-      return { draft, error: 'Use an absolute path, or type home' };
-    }
-    next.startPath = startPath;
     return { draft: next };
   }
 
@@ -644,7 +593,6 @@ export function fieldOf(step: Step): Field {
     case 'jump':
       return 'jump';
     default:
-      // startPathChoice and startPath are not part of the flow today; they sit with sign-in.
       return 'auth';
   }
 }
@@ -694,9 +642,6 @@ export function stepTitle(step: Step): string {
       return 'Private key file';
     case 'passphrase':
       return 'Key passphrase';
-    case 'startPathChoice':
-    case 'startPath':
-      return 'Remote folder';
     case 'jumpChoice':
       return 'Jump host';
     case 'jump':
