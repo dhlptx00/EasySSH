@@ -75,6 +75,16 @@ export function ratingUrl(uriScheme: string): string {
     : 'https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews';
 }
 
+export const RATING_MESSAGE = 'Enjoying Easy SSH? A rating or a GitHub star helps others find it.';
+export const RATING_BUTTONS = ['Rate', 'Star on GitHub', 'Later'];
+
+/** The page a rating prompt button opens; undefined for Later or a dismissed prompt. */
+export function ratingChoiceUrl(picked: string | undefined, uriScheme: string): string | undefined {
+  if (picked === 'Rate') return ratingUrl(uriScheme);
+  if (picked === 'Star on GitHub') return 'https://github.com/dhlptx00/EasySSH';
+  return undefined;
+}
+
 /**
  * How terminal links open: Alt when multi-cursor uses Ctrl/Cmd, else Ctrl (Cmd on macOS).
  * clientPlatform is undefined when the window runs on another machine (code-server in a
@@ -507,9 +517,9 @@ export class EasySshController implements vscode.TerminalLinkProvider<PathLink> 
 
   /** Shown once, after the fifth successful connection; any answer, or none, ends it. */
   private async askForRating(): Promise<void> {
-    const rate = 'Rate';
-    const picked = await vscode.window.showInformationMessage('Enjoying Easy SSH? A rating helps others find it.', rate, 'Not now');
-    if (picked === rate) await vscode.env.openExternal(vscode.Uri.parse(ratingUrl(vscode.env.uriScheme)));
+    const picked = await vscode.window.showInformationMessage(RATING_MESSAGE, ...RATING_BUTTONS);
+    const url = ratingChoiceUrl(picked, vscode.env.uriScheme);
+    if (url) await vscode.env.openExternal(vscode.Uri.parse(url));
   }
 
   private async pickSaveFile(folder: string, name: string): Promise<string | undefined> {

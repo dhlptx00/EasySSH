@@ -379,7 +379,7 @@ Questions and ideas: [GitHub Discussions](https://github.com/dhlptx00/EasySSH/di
 
 ## Rate it
 
-If Easy SSH helps you, please [star the repo](https://github.com/dhlptx00/EasySSH) or leave a rating on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh&ssr=false#review-details) or [Open VSX](https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews); it helps others find it. Easy SSH itself asks only once, after your fifth connection.
+If Easy SSH helps you, please [star the repo](https://github.com/dhlptx00/EasySSH) or leave a rating on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=easy-ssh.easy-ssh&ssr=false#review-details) or [Open VSX](https://open-vsx.org/extension/easy-ssh/easy-ssh/reviews); it helps others find it. Easy SSH itself asks only once, after your fifth connection, with Rate, Star on GitHub and Later buttons.
 
 ## Support
 
