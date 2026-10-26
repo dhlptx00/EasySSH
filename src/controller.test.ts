@@ -109,6 +109,16 @@ describe('controller: two Easy SSH terminals', () => {
 });
 
 describe('controller helpers', () => {
+  it('offers Rate, Star on GitHub and Later in the rating prompt', async () => {
+    const { RATING_BUTTONS, ratingChoiceUrl } = await import('./controller');
+    assert.deepEqual(RATING_BUTTONS, ['Rate', 'Star on GitHub', 'Later']);
+    assert.match(ratingChoiceUrl('Rate', 'cursor') ?? '', /open-vsx\.org/);
+    assert.match(ratingChoiceUrl('Rate', 'vscode') ?? '', /marketplace\.visualstudio\.com/);
+    assert.equal(ratingChoiceUrl('Star on GitHub', 'vscode'), 'https://github.com/dhlptx00/EasySSH');
+    assert.equal(ratingChoiceUrl('Later', 'vscode'), undefined);
+    assert.equal(ratingChoiceUrl(undefined, 'vscode'), undefined);
+  });
+
   it('sends VS Code to the Marketplace and other editors to Open VSX for a rating', async () => {
     const { ratingUrl } = await import('./controller');
     assert.match(ratingUrl('vscode'), /marketplace\.visualstudio\.com.*review-details/);
